@@ -1,0 +1,28 @@
+source ~/.bashrc
+shopt -s expand_aliases
+oci() {
+  docker run --rm -it \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+oci compute shape list -c $C \
+  | jq -r '
+    [ .data[]
+      | {
+          shape: .shape,
+          cpu_model: .["processor-description"],
+          base_ocpu: .ocpus,
+          base_mem: .["memory-in-gbs"],
+          max_ocpu: (if .["ocpu-options"] != null then .["ocpu-options"].max else .ocpus end),
+          max_mem: (if .["memory-options"] != null then .["memory-options"].["max-in-gbs"] else .["memory-in-gbs"] end)
+        }
+    ] as $shapes
+    | (
+        ["Shape","CPU_Model","Base_OCPU","Base_Mem(GB)","Max_OCPU","Max_Mem(GB)"]
+      ),
+      (
+        $shapes[]
+        | [ .shape, .cpu_model, .base_ocpu, .base_mem, .max_ocpu, .max_mem ]
+      )
+    | @tsv
+  ' | column -s $'\t' -t

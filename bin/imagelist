@@ -1,0 +1,12 @@
+source ~/.bashrc
+shopt -s expand_aliases
+oci() {
+  docker run --rm -it \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+oci compute image list -c $C --all \
+  | jq -r '.data[] 
+    | select(.["operating-system"]=="Canonical Ubuntu") 
+    | "\(.id) | \(.["display-name"]) | \(.["operating-system-version"])"
+  ' | column -t
