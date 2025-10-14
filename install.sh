@@ -76,5 +76,7 @@ echo "export SL=$SECURITY_LIST" >> ~/.bashrc
 
 source ~/.bashrc
 
-echo "==> Setup complete! Please open a new terminal or run 'source ~/.bashrc' to use OCI CLI."
+mkdir -p ~/.oci
 
+echo "⚠️ IMPORTANT: Please copy your OCI config file, private key, and the cloud instance's public key to the ~/.oci/ directory."
+echo "==> Setup complete! Please open a new terminal or run 'source ~/.bashrc' to start using the OCI CLI."
