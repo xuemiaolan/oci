@@ -1,0 +1,37 @@
+source ~/.bashrc
+shopt -s expand_aliases
+oci() {
+  docker run --rm \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+instances=$(oci compute instance list -c "$C" --all \
+  | jq -r '.data[] | [.id, ."display-name", ."shape-config"."ocpus", ."shape-config"."memory-in-gbs"] | @tsv')
+
+while IFS=$'\t' read -r iid name ocpu mem; do
+  vnic=$(oci compute instance list-vnics --instance-id "$iid")
+  priv_ip=$(echo "$vnic" | jq -r '.data[0]."private-ip" // empty'|xargs)
+  pub_ip=$(echo "$vnic" | jq -r '.data[0]."public-ip" // empty'|xargs)
+
+  bootvol_id=$(oci compute boot-volume-attachment list \
+    --compartment-id "$C" \
+    --availability-domain "$AD" \
+    --instance-id "$iid" \
+    | jq -r '.data[0]."boot-volume-id" // empty' | xargs)
+
+  if [[ -n "$bootvol_id" ]]; then
+    bootvol_size=$(oci bv boot-volume get --boot-volume-id "$bootvol_id" \
+      | jq -r '.data."size-in-gbs" // empty' | xargs)
+  else
+    bootvol_size="N/A"
+  fi
+
+  echo -e "Instance ID: $iid"
+  echo -e "Name: $name"
+  echo -e "OCPUs: $ocpu"
+  echo -e "Memory: ${mem}GB"
+  echo -e "BootVolume: ${bootvol_id:-N/A} (${bootvol_size} GB)"
+  echo -e "Private IP: ${priv_ip:-N/A}"
+  echo -e "Public IP: ${pub_ip:-N/A}"
+  echo "---"
+done <<< "$instances"
