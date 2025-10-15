@@ -1,0 +1,46 @@
+source ~/.bashrc
+shopt -s expand_aliases
+oci() {
+  docker run --rm  \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+
+oci network security-list get \
+  --security-list-id $SL \
+  --query 'data."ingress-security-rules"' \
+  --raw-output > ~/.oci/ingress.json 
+  
+oci network security-list get \
+  --security-list-id $SL \
+  --query 'data."egress-security-rules"' \
+  --raw-output > ~/.oci/egress.json
+
+oci network security-list list -c $C | jq -r '
+.data[] |
+  (.["ingress-security-rules"][] |
+    {
+      Direction: "Ingress",
+      Source: .source,
+      Destination: "Instance",
+      Protocol: .protocol,
+      Port: (
+        if (.["tcp-options"]? and .["tcp-options"]["destination-port-range"]?) then .["tcp-options"]["destination-port-range"].min
+        elif (.["udp-options"]? and .["udp-options"]["destination-port-range"]?) then .["udp-options"]["destination-port-range"].min
+        else "All" end
+      )
+    }
+  ),
+  (.["egress-security-rules"][] |
+    {
+      Direction: "Egress",
+      Source: "Instance",
+      Destination: .destination,
+      Protocol: .protocol,
+      Port: "All"
+    }
+  )
+  | [.Direction, .Source, .Destination, .Protocol, .Port]
+  | @tsv
+' | column -t
+
