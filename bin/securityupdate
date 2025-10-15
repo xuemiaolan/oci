@@ -9,4 +9,3 @@ oci network security-list update \
   --security-list-id $SL \
   --ingress-security-rules file://.oci/ingress.json  \
   --egress-security-rules file://.oci/egress.json
-  

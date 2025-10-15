@@ -1,0 +1,38 @@
+#!/bin/bash
+source ~/.bashrc
+shopt -s expand_aliases
+oci() {
+  docker run --rm  \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+
+RANGE=${1:-1d}
+if [[ $RANGE =~ ^[0-9]+h$ ]]; then
+  START_TIME=$(date -u -d "-${RANGE%h} hour" '+%Y-%m-%dT%H:%M:%SZ')
+elif [[ $RANGE =~ ^[0-9]+d$ ]]; then
+  START_TIME=$(date -u -d "-${RANGE%d} day" '+%Y-%m-%dT%H:%M:%SZ')
+else
+  echo "Usage: $0 <number>[h|d]"
+  exit 1
+fi
+END_TIME=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+oci audit event list -c "$C" \
+  --start-time "$START_TIME" \
+  --end-time "$END_TIME" \
+  --all --output json \
+| jq -r '
+    .data[]
+    | [
+        (.["event-time"] | sub(".+T"; "") | sub("\\..*"; "")),
+        .data["event-name"],
+        .data.identity["ip-address"],
+        .data.request.action,
+        .data.response.status,
+        .data.response.message
+      ]
+    | @tsv
+  ' \
+| awk '{if($5 != 200){print "\033[31m"$0"\033[0m"} else {print "\033[32m"$0"\033[0m"}}' \
+| column -t
+

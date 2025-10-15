@@ -27,6 +27,9 @@ source ~/.bashrc
 AVAILABLE_DOMAIN=$(oci iam availability-domain list -c $C | jq -r '.data[].name')
 echo "export AD=$AVAILABLE_DOMAIN" >> ~/.bashrc
 
+VCN=$(oci network vcn list -c $C|jq -r '.data[].id')
+echo "export VC=$VCN" >> ~/.bashrc
+
 # 子网
 SUBNET_ID=$(oci network subnet list -c $C | jq -r '.data[].id')
 echo "export SI=$SUBNET_ID" >> ~/.bashrc

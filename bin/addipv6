@@ -1,0 +1,24 @@
+INDEX=1 
+oci network vcn add-ipv6-vcn-cidr --vcn-id $VC
+
+BASE=$(oci network vcn get --vcn-id $VC | jq -r '.data."ipv6-cidr-blocks"[0]')
+
+PREFIX=$(echo $BASE | cut -d':' -f1-4)
+LAST_GROUP=$(echo $PREFIX | cut -d':' -f4)
+NEW_LAST_GROUP=$(printf "%s%02x" "${LAST_GROUP:0:2}" $INDEX)
+NEXT64=$(printf "%s:%s::/64" "$(echo $PREFIX | cut -d':' -f1-3)" "$NEW_LAST_GROUP")
+
+oci network subnet add-ipv6-subnet-cidr \
+  --subnet-id $SI \
+  --ipv6-cidr-block "$NEXT64
+
+ROUTEID=$(oci network subnet get --subnet-id $SI|jq -r '.data["route-table-id"]')
+
+GATEID=$(oci network internet-gateway list -c $C|jq -r '.data[].id')
+oci network route-table update \
+  --rt-id "$ROUTEID" \
+  --route-rules "[
+    {\"destination\":\"0.0.0.0/0\",\"destinationType\":\"CIDR_BLOCK\",\"networkEntityId\":\"$GATEID\"},
+    {\"destination\":\"::/0\",\"destinationType\":\"CIDR_BLOCK\",\"networkEntityId\":\"$GATEID\"}
+  ]" \
+  --force
