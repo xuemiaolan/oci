@@ -2,6 +2,13 @@
 # 3️⃣ 配置 OCI 环境变量
 # -------------------------------
 echo "==> Configuring OCI environment variables..."
+source ~/.bashrc
+shopt -s expand_aliases
+oci() {
+  docker run --rm  \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
 
 COMPARTMENT_ID=$(curl -sf http://169.254.169.254/opc/v1/instance/ | jq -r .compartmentId)
 TENANT_ID=$(curl -sf http://169.254.169.254/opc/v1/instance/ | jq -r .tenantId)
