@@ -1,0 +1,10 @@
+source ~/.bashrc
+shopt -s expand_aliases
+oci() {
+  docker run --rm  \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+oci limits value list -c $C --service-name compute --all \
+  | jq -r '.data[] | select(.value > 0) | "\(.name)\t\(.value)"' | column -t
+
