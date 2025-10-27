@@ -1,0 +1,27 @@
+source ~/.bashrc
+shopt -s expand_aliases
+oci() {
+  docker run --rm  \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+NLB_ID=$(oci nlb network-load-balancer list -c $C --all|jq -r '.data.items[].id')
+
+oci nlb backend-set create \
+  --network-load-balancer-id $NLB_ID \
+  --name my-backendset \
+  --policy FIVE_TUPLE \
+  --health-checker '{"protocol":"TCP","port":9,"intervalInMillis":60000,"timeoutInMillis":1000,"retries":1}'
+
+oci nlb backend create \
+  --network-load-balancer-id $NLB_ID \
+  --backend-set-name my-backendset \
+  --ip-address 10.0.0.144 \
+  --port 8443
+
+oci nlb listener create \
+  --network-load-balancer-id $NLB_ID \
+  --name udp-listener \
+  --protocol UDP \
+  --port 8443 \
+  --default-backend-set-name my-backendset

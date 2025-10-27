@@ -1,0 +1,40 @@
+source ~/.bashrc
+shopt -s expand_aliases
+oci() {
+  docker run --rm  \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+
+nlbs=$(oci nlb network-load-balancer list \
+  --compartment-id "$C" --all \
+  | jq -r '.data.items[]?.id // .data[]?.id')
+
+for nlb in $nlbs; do
+  echo "=========================================================="
+  
+  # Get full JSON once
+  nlb_json=$(oci nlb network-load-balancer get --network-load-balancer-id "$nlb")
+
+  name=$(echo "$nlb_json" | jq -r '.data["display-name"]')
+  echo "Name: $name"
+  echo "ID:   $nlb"
+
+  # Public IPs
+  ip=$(echo "$nlb_json" \
+       | jq -r '[.data["ip-addresses"][]? | select(.["is-public"]==true) | .["ip-address"]] | join(", ")')
+  [ -z "$ip" ] && ip="<private-only>"
+  echo "Public IP: $ip"
+
+  # Backend sets and backends
+  echo "$nlb_json" | jq -r '
+    .data["backend-sets"] | to_entries[] |
+    "  Backend Set: \(.key)\n" +
+    (.value.backends[]? | "    Backend: \(.["ip-address"]):\(.port)")'
+  
+  # Listeners
+  echo "$nlb_json" | jq -r '
+    .data.listeners | to_entries[] |
+    "  Listener: \(.key) (\(.value.protocol)) Port:\(.value.port)"'
+done
+

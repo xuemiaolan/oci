@@ -1,0 +1,15 @@
+source ~/.bashrc
+shopt -s expand_aliases
+oci() {
+  docker run --rm  \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+
+oci nlb network-load-balancer create \
+  --compartment-id $C \
+  --display-name MyNLB \
+  --subnet-id $SI \
+  --is-private false \
+  --is-preserve-source-destination true \
+  --wait-for-state SUCCEEDED
