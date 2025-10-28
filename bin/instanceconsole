@@ -1,0 +1,15 @@
+source ~/.bashrc
+shopt -s expand_aliases
+oci() {
+  docker run --rm  \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+
+CON_STR=$(oci compute instance-console-connection list -c $C | jq -r '.data[0]."connection-string" | match("ProxyCommand=.*") | .string')
+
+ssh -i ~/.ssh/id_rsa \
+  -o HostKeyAlgorithms=+ssh-rsa \
+  -o PubkeyAcceptedKeyTypes=+ssh-rsa \
+  -o ProxyCommand=$CON_STR
+
