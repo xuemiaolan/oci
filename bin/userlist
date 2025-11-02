@@ -1,0 +1,9 @@
+source ~/.bashrc
+shopt -s expand_aliases
+oci() {
+  docker run --rm  \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+oci iam user list | jq -r '.data[] | "user: \(.name)\nemail: \(.email)\ncreate-time: \(.["time-created"])\nlast-login: \(.["last-successful-login-time"])\n"'|column -t
+oci iam region-subscription list | jq -r '.data[] | "region: \(.["region-name"])"'
