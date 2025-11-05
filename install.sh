@@ -1,9 +1,6 @@
 #!/bin/bash
 set -e
 
-# -------------------------------
-# 1️⃣ 安装 Docker CE
-# -------------------------------
 echo "==> Installing Docker CE..."
 for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do 
   sudo apt-get remove -y $pkg || true
@@ -29,14 +26,10 @@ sudo systemctl start docker
 sudo usermod -aG docker $USER
 newgrp docker
 
-# -------------------------------
-# 2️⃣ 安装 OCI CLI Docker
-# -------------------------------
 echo "==> Installing OCI CLI Docker..."
 docker pull ghcr.io/oracle/oci-cli:latest
 docker tag ghcr.io/oracle/oci-cli:latest oci
 
-# 添加 alias 到 bashrc
 if ! grep -q "alias oci=" ~/.bashrc; then
   echo "alias oci='docker run --rm -it -e \"OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True\" -v \"$HOME/.oci:/oracle/.oci\" oci'" >> ~/.bashrc
 fi
