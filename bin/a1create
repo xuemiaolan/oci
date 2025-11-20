@@ -1,10 +1,11 @@
 source ~/.bashrc
 shopt -s expand_aliases
 oci() {
-  docker run --rm -it \
+  docker run --rm -i \
     -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
     -v "$HOME/.oci:/oracle/.oci" oci "$@"
 }
 I=$(imagelist |grep -m 1 "Canonical-Ubuntu-24.04-aarch64" |awk '{print $1}')
 H=$(oci iam tenancy get --tenancy-id $C |jq -r '.data["home-region-key"]')
-oci compute instance launch   --compartment-id $C   --availability-domain $AD  --display-name $H-A1-4C24G --subnet-id $SI   --shape VM.Standard.A1.Flex   --shape-config '{"ocpus": 4, "memoryInGBs": 24}'   --boot-volume-size-in-gbs 100   --image-id $I   --assign-public-ip true   --ssh-authorized-keys-file .oci/id_rsa.pub   --wait-for-state  RUNNING
+COUNTRY=$(curl -s https://ipinfo.io/country)
+oci compute instance launch   --compartment-id $C   --availability-domain $AD  --display-name $COUNTRY-$H-A1 --subnet-id $SI   --shape VM.Standard.A1.Flex   --shape-config '{"ocpus": 1, "memoryInGBs": 6}'   --boot-volume-size-in-gbs 100   --image-id $I   --assign-public-ip true   --ssh-authorized-keys-file .oci/id_rsa.pub   --wait-for-state  RUNNING
