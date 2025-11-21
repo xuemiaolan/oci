@@ -1,0 +1,19 @@
+source ~/.bashrc
+shopt -s expand_aliases
+oci() {
+  docker run --rm -i \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+
+A1_INSTANCE_OCID=$(
+  oci compute instance list \
+  --compartment-id $C \
+  --query "data[?contains(shape, 'A1')].id | [0]" \
+  --raw-output
+)
+
+oci compute instance update \
+--instance-id $A1_INSTANCE_OCID \
+--shape VM.Standard.A1.Flex \
+--shape-config '{"ocpus": 4, "memoryInGBs": 24}'
