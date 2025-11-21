@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+IP=$(curl -s https://api.ipify.org)
+INFO=$(curl -s "https://ipinfo.io/$IP/json")
+COUNTRY=$(echo "$INFO" | jq -r '.country')
+REGION=$(echo "$INFO" | jq -r '.region')
+ORG=$(echo "$INFO" | jq -r '.org')
+ISP=$(echo "$ORG" | cut -d' ' -f2- | tr -d ',' | tr '[:upper:]' '[:lower:]' | tr ' ' '_')
+echo "Public IP : $IP"
+echo "Country   : $COUNTRY"
+echo "Region    : $REGION"
+echo "ISP       : $ISP"
+
