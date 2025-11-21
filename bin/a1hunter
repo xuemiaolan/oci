@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+source ~/.bashrc
+shopt -s expand_aliases
+
+oci() {
+  docker run --rm \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+
+LOG=~/A1loop.log
+echo "===== A1 Create Loop Started: $(date) =====" | tee -a "$LOG"
+
+I=$(imagelist | grep -m 1 "Canonical-Ubuntu-24.04-aarch64" | awk '{print $1}')
+H=$(oci iam tenancy get --tenancy-id "$C" | jq -r '.data["home-region-key"]')
+
+while true; do
+    echo "$(date) 👉 Attempting to create A1 instance..." | tee -a "$LOG"
+
+    RAND=$(openssl rand -hex 2)
+    DISPLAY_NAME="$H-A1-2C12G-$RAND"
+
+    # 捕获输出
+    RESULT=$(oci compute instance launch \
+        --compartment-id "$C" \
+        --availability-domain "$AD" \
+        --display-name "$DISPLAY_NAME" \
+        --subnet-id "$SI" \
+        --shape VM.Standard.A1.Flex \
+        --shape-config '{"ocpus": 2, "memoryInGBs": 12}' \
+        --boot-volume-size-in-gbs 50 \
+        --image-id "$I" \
+        --assign-public-ip true \
+        --ssh-authorized-keys-file .oci/id_rsa.pub \
+        --wait-for-state RUNNING 2>&1)
+
+    echo "$RESULT" | tee -a "$LOG"
+
+    # 去掉第一行非 JSON（如 "ServiceError:"）
+    JSON=$(echo "$RESULT" | sed '1{/^ServiceError:/d}')
+
+    # 判断成功
+    if echo "$JSON" | jq -e '.data.id' >/dev/null 2>&1; then
+        echo "$(date) ✅ SUCCESS: Instance created! Name: $DISPLAY_NAME" | tee -a "$LOG"
+        exit 0
+    else
+        ERR=$(echo "$JSON" | jq -r '.message // .code // "unknown error"' 2>/dev/null)
+        echo "$(date) ❌ FAILED: $ERR" | tee -a "$LOG"
+        echo "$(date) ⏳ Retrying in 4 minutes..." | tee -a "$LOG"
+        sleep 240
+    fi
+done
+

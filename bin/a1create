@@ -7,5 +7,6 @@ oci() {
 }
 I=$(imagelist |grep -m 1 "Canonical-Ubuntu-24.04-aarch64" |awk '{print $1}')
 H=$(oci iam tenancy get --tenancy-id $C |jq -r '.data["home-region-key"]')
+RAND=$(openssl rand -hex 2)
 COUNTRY=$(curl -s https://ipinfo.io/country)
-oci compute instance launch   --compartment-id $C   --availability-domain $AD  --display-name $COUNTRY-$H-A1 --subnet-id $SI   --shape VM.Standard.A1.Flex   --shape-config '{"ocpus": 1, "memoryInGBs": 6}'   --boot-volume-size-in-gbs 100   --image-id $I   --assign-public-ip true   --ssh-authorized-keys-file .oci/id_rsa.pub   --wait-for-state  RUNNING
+oci compute instance launch   --compartment-id $C   --availability-domain $AD  --display-name $COUNTRY-$H-A1-$RAND --subnet-id $SI   --shape VM.Standard.A1.Flex   --shape-config '{"ocpus": 2, "memoryInGBs": 12}'   --boot-volume-size-in-gbs 50   --image-id $I   --assign-public-ip true   --ssh-authorized-keys-file .oci/id_rsa.pub   --wait-for-state  RUNNING
