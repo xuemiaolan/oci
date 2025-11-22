@@ -80,3 +80,21 @@ if jq -e 'map(select(.currency=="JPY")) | length>0' "$GROUP_ARRAY" >/dev/null; t
   echo
 fi
 
+oci usage-api usage-summary request-summarized-usages \
+  --tenant-id $T \
+  --time-usage-started $START \
+  --time-usage-ended $END \
+  --granularity MONTHLY \
+  --query-type COST \
+  --group-by '["resourceId"]' \
+  --output json \
+| jq -r '
+    .data.items[]
+    | select((.["attributed-cost"] // "0" | tonumber) != 0)
+    | [
+        (."resource-id" // "-"),
+        (.["attributed-cost"] // "0")
+      ]
+    | @tsv
+' | column -t
+
