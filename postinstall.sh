@@ -24,20 +24,20 @@ echo "export U=$USER_ID" >> ~/.bashrc
 source ~/.bashrc
 
 # 可用域
-AVAILABLE_DOMAIN=$(oci iam availability-domain list -c $C | jq -r '.data[].name')
+AVAILABLE_DOMAIN=$(oci iam availability-domain list -c $COMPARTMENT_ID | jq -r '.data[].name')
 echo "export AD=$AVAILABLE_DOMAIN" >> ~/.bashrc
 
-VCN=$(oci network vcn list -c $C|jq -r '.data[].id')
+VCN=$(oci network vcn list -c $COMPARTMENT_ID|jq -r '.data[].id')
 echo "export VC=$VCN" >> ~/.bashrc
 
 # 子网
-SUBNET_ID=$(oci network subnet list -c $C | jq -r '.data[].id')
+SUBNET_ID=$(oci network subnet list -c $COMPARTMENT_ID | jq -r '.data[].id')
 echo "export SI=$SUBNET_ID" >> ~/.bashrc
 
 source ~/.bashrc
 
 # 安全列表
-SECURITY_LIST=$(oci network subnet get --subnet-id $SI | jq -r '.data["security-list-ids"][]')
+SECURITY_LIST=$(oci network subnet get --subnet-id $SUBNET_ID | jq -r '.data["security-list-ids"][]')
 echo "export SL=$SECURITY_LIST" >> ~/.bashrc
 
 source ~/.bashrc
