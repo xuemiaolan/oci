@@ -1,0 +1,82 @@
+#!/bin/bash
+set -e
+shopt -s expand_aliases
+
+oci() {
+  docker run --rm -i \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "jq missing. Install: sudo apt install jq -y"
+  exit 1
+fi
+
+if [[ -z "$T" ]]; then
+  echo "Missing tenancy OCID. export T=\"ocid1.tenancy...\""
+  exit 1
+fi
+
+END=$(date +%Y-%m-%d)
+START=$(date -d "-60 days" +%Y-%m-%d)
+
+RAW="/tmp/cost_raw.json"
+NDJSON="/tmp/cost_array.json"
+ARRAY="/tmp/cost_array_fixed.json"
+GROUP_ND="/tmp/cost_grouped.json"
+GROUP_ARRAY="/tmp/cost_grouped_fixed.json"
+
+# fetch
+oci usage-api usage-summary request-summarized-usages \
+  --tenant-id "$T" \
+  --time-usage-started "$START" \
+  --time-usage-ended "$END" \
+  --granularity DAILY \
+  --query-type COST \
+  --output json > "$RAW"
+
+# extract cost>0 silently
+jq -r '
+  .data.items[]
+  | select(."attributed-cost" != "0")
+  | {
+      date: (."time-usage-started"[0:10]),
+      cost: (."attributed-cost" | tonumber),
+      currency: (."currency" // "JPY")
+    }
+' "$RAW" > "$NDJSON"
+
+jq -s '.' "$NDJSON" > "$ARRAY"
+
+jq -r '
+  group_by(.currency)[] |
+  {
+    currency: .[0].currency,
+    total: (map(.cost) | add)
+  }
+' "$ARRAY" > "$GROUP_ND"
+
+jq -s '.' "$GROUP_ND" > "$GROUP_ARRAY"
+
+echo
+echo "=================== COST SUMMARY ==================="
+jq -r '.[] | "Currency: \(.currency)   Total: \(.total)"' "$GROUP_ARRAY"
+echo "===================================================="
+echo
+
+# USD convert if JPY exists
+if jq -e 'map(select(.currency=="JPY")) | length>0' "$GROUP_ARRAY" >/dev/null; then
+  TOTAL_JPY=$(jq -r '.[] | select(.currency=="JPY") | .total' "$GROUP_ARRAY")
+
+  RATE=$(curl -s https://api.exchangerate-api.com/v4/latest/JPY | jq -r '.rates.USD')
+  USD=$(awk "BEGIN {print $TOTAL_JPY * $RATE}")
+
+  echo "=================== USD CONVERSION =================="
+  echo "JPY Total     : $TOTAL_JPY"
+  echo "JPY→USD Rate  : $RATE"
+  echo "USD Total     : $USD"
+  echo "====================================================="
+  echo
+fi
+
