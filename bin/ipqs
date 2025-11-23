@@ -1,0 +1,70 @@
+#!/bin/bash
+set -e
+
+IPQS_KEY="fmy4Q4Neuhgr8gXxFLSJeZJIFT6hJeX6"
+IP="$1"
+
+if [[ -z "$IPQS_KEY" ]]; then
+    echo "[ERROR] Missing IPQS API key. Set it:"
+    echo 'export IPQS_KEY="xxxxx"'
+    exit 1
+fi
+
+if [[ -z "$IP" ]]; then
+    echo "[i] No IP provided, detecting..."
+    IP=$(curl -s https://api.ipify.org)
+fi
+
+RESP=$(curl -s "https://ipqualityscore.com/api/json/ip/$IPQS_KEY/$IP")
+
+if ! command -v jq >/dev/null; then
+    echo "$RESP"
+    exit 0
+fi
+
+CLOUD_PATTERN="amazon|aws|google|microsoft|azure|oracle|digitalocean|linode|vultr|ovh|leaseweb|hetzner|hivelocity"
+echo "$RESP" | jq -r \
+  --arg cloud "$CLOUD_PATTERN" '
+    . as $r |
+    
+    (
+      ($r.ISP | ascii_downcase | test($cloud))
+      or ($r.organization | ascii_downcase | test($cloud))
+      or $r.proxy or $r.vpn or $r.tor
+    ) as $is_dc |
+
+    (
+      if $r.fraud_score >= 90 then "Very High"
+      elif $r.fraud_score >= 70 then "High"
+      elif $r.fraud_score >= 40 then "Medium"
+      else "Low"
+      end
+    ) as $risk_level |
+
+    {
+      ip: $r.host,
+      fraud_score: $r.fraud_score,
+      risk_level: $risk_level,
+
+      country: $r.country_code,
+      region: $r.region,
+      city: $r.city,
+      latitude: $r.latitude,
+      longitude: $r.longitude,
+      zip_code: $r.zip_code,
+
+      isp: $r.ISP,
+      organization: $r.organization,
+      asn: $r.ASN,
+
+      proxy: $r.proxy,
+      vpn: $r.vpn,
+      tor: $r.tor,
+      recent_abuse: $r.recent_abuse,
+      is_crawler: $r.is_crawler,
+
+      is_datacenter: $is_dc,
+      is_residential: ($is_dc | not)
+    }
+'
+

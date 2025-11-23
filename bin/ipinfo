@@ -1,0 +1,90 @@
+#!/bin/bash
+set -e
+
+IPQS_KEY="fmy4Q4Neuhgr8gXxFLSJeZJIFT6hJeX6"
+
+API_KEY="azb-u00uUjjboYB2lC9HUIB-n2IbHNgO0cs33Y.1dN0h-rSDyxqRwnl6VYEJDkHf"   # Set your API key here
+IP="$1"
+
+if [[ -z "$API_KEY" ]]; then
+    echo "[ERROR] API_KEY missing. Set it with:"
+    echo "export API_KEY=\"your_api_key\""
+    exit 1
+fi
+
+# Detect IP automatically
+if [[ -z "$IP" ]]; then
+    echo "[i] No IP provided. Detecting..."
+    IP=$(curl -s https://api.ipify.org)
+fi
+
+echo "[i] Checking IP reputation for: $IP"
+echo
+
+RESP=$(curl -s -X POST "https://api.apivoid.com/v2/ip-reputation" \
+     -H "Content-Type: application/json" \
+     -H "X-API-Key: $API_KEY" \
+     -d "{\"ip\": \"$IP\"}" )
+
+if ! command -v jq >/dev/null 2>&1; then
+    echo "$RESP"
+    exit 0
+fi
+
+# Pretty format main info
+echo "================ IP REPUTATION ================"
+echo "$RESP" | jq -r '
+{
+  ip: .ip,
+  version: .version,
+
+  country: .information.country_name,
+  region: .information.region_name,
+  city: .information.city_name,
+  postal_code: (.information.postal_code // "-"),
+  latitude: .information.latitude,
+  longitude: .information.longitude,
+
+  isp: .information.isp,
+  asn: .information.asn,
+
+  blacklist_hits: .blacklists.detections,
+  blacklist_total: .blacklists.engines_count,
+  blacklist_rate: .blacklists.detection_rate,
+
+  is_proxy: .anonymity.is_proxy,
+  is_vpn: .anonymity.is_vpn,
+  is_tor: .anonymity.is_tor,
+  is_hosting: .anonymity.is_hosting,
+
+  risk_score: .risk_score.result
+}
+'
+echo "==============================================="
+echo
+
+# ---------------- Reverse geocode location ----------------
+echo "[i] Reverse geocoding (OpenStreetMap)..."
+GEO=$(curl -s "https://nominatim.openstreetmap.org/reverse?format=json&lat=$(echo "$RESP" | jq -r '.information.latitude')&lon=$(echo "$RESP" | jq -r '.information.longitude')&zoom=18&addressdetails=1")
+
+echo
+echo "================= LOCATION INFO ================"
+echo "$GEO" | jq -r '
+.address as $a |
+{
+  street_number: ($a.house_number // "-"),
+  street_name: ($a.road // $a.street // "-"),
+  street_block: ($a.neighbourhood // "-"),
+
+  district: ($a.suburb // "-"),
+  city: ($a.city // $a.town // $a.village // "-"),
+
+  administrative_area: ($a.county // $a.municipality // "-"),
+  state_province: ($a.state // "-"),
+
+  postal_code: ($a.postcode // "-"),
+  country: ($a.country // "-")
+}
+'
+echo "================================================="
+
