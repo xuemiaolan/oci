@@ -1,0 +1,39 @@
+#!/bin/bash
+source ~/.bashrc
+shopt -s expand_aliases
+oci() {
+  docker run --rm -i \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+
+all_regions=$(oci iam region list | jq '.data')
+
+# 打印表格
+echo "$all_regions" \
+  | jq -r '.[] | [.key, .name] | @tsv' \
+  | column -t
+
+# 打印总数
+count_all=$(echo "$all_regions" | jq 'length')
+echo
+echo "Total Regions: $count_all"
+echo
+
+# ===== SUBSCRIBED REGIONS =====
+echo "=============================="
+echo " SUBSCRIBED REGIONS ($T) "
+echo "=============================="
+
+sub_regions=$(oci iam region-subscription list --tenancy-id "$T" | jq '.data')
+
+echo "$sub_regions" \
+  | jq -r '.[]
+    | [.["region-key"], .["region-name"], .status, (if .["is-home-region"] then "HOME" else "" end)]
+    | @tsv' \
+  | column -t
+
+count_sub=$(echo "$sub_regions" | jq 'length')
+echo
+echo "Subscribed: $count_sub"
+echo
