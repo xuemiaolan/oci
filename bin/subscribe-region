@@ -1,0 +1,60 @@
+#!/bin/bash
+source ~/.bashrc
+shopt -s expand_aliases
+oci() {
+  docker run --rm -i \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+
+if [ -z "$1" ]; then
+    echo "Usage: $0 <region-name | region-key>"
+    echo "Example: $0 ap-singapore-1"
+    echo "Example: $0 SIN"
+    exit 1
+fi
+
+INPUT="$1"
+
+# ===== 确保 $T 存在（Tenancy OCID）=====
+if [ -z "$T" ]; then
+    echo "ERROR: Environment variable \$T (Tenancy OCID) is not set."
+    echo "Set it first: export T=ocid1.tenancy..."
+    exit 1
+fi
+
+echo "[INFO] Input region: $INPUT"
+
+# ===== 获取所有 region 列表 =====
+ALL=$(oci iam region list | jq -r '.data[] | [.key, .name] | @tsv')
+
+# 尝试把输入识别为 key 或 name
+REGION_KEY=$(echo "$ALL" | awk -v R="$INPUT" '$1==R || $2==R {print $1}')
+REGION_NAME=$(echo "$ALL" | awk -v R="$INPUT" '$1==R || $2==R {print $2}')
+
+if [ -z "$REGION_KEY" ]; then
+    echo "ERROR: Region '$INPUT' not found."
+    exit 1
+fi
+
+echo "[INFO] Detected region-key : $REGION_KEY"
+echo "[INFO] Detected region-name: $REGION_NAME"
+
+# ===== 检查是否已订阅 =====
+SUBSCRIBED=$(oci iam region-subscription list --tenancy-id "$T" \
+    | jq -r '.data[]."region-key"')
+
+if echo "$SUBSCRIBED" | grep -q "^$REGION_KEY$"; then
+    echo "[INFO] Region '$REGION_NAME' ($REGION_KEY) is already subscribed."
+    exit 0
+fi
+
+# ===== 执行订阅 =====
+echo "[ACTION] Subscribing to region: $REGION_NAME ($REGION_KEY)..."
+
+oci iam region-subscription create \
+    --tenancy-id "$T" \
+    --region-key "$REGION_KEY"
+
+echo "[SUCCESS] Region subscribed: $REGION_NAME ($REGION_KEY)"
+
