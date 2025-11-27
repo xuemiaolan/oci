@@ -18,11 +18,10 @@ VCN=$(oci network vcn list -c $C|jq -r '.data[].id')
 SI=$(oci network subnet list -c $C | jq -r '.data[].id')
 
 
-I=$(oci compute image list -c $C --all   | jq -r '.data[] \
-    | select(.["operating-system"]=="Canonical Ubuntu") \
-    | "\(.id) | \(.["display-name"]) | \(.["operating-system-version"])" \
-    '|grep -m 1 "Canonical-Ubuntu-24.04-aarch64" | awk '{print $1}')
+I=$(oci compute image list -c $C --all   | jq -r '.data[] | select(.["operating-system"]=="Canonical Ubuntu") | "\(.id) | \(.["display-name"]) | \(.["operating-system-version"])"' | grep -m 1 "Canonical-Ubuntu-24.04-aarch64" | awk '{print $1}')
+
 H=$(oci iam tenancy get --tenancy-id "$C" | jq -r '.data["home-region-key"]')
+
 
 while true; do
     echo "$(date) 👉 Attempting to create A1 instance..." | tee -a "$LOG"
