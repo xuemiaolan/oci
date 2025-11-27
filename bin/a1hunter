@@ -11,6 +11,13 @@ oci() {
 LOG=~/A1loop.log
 echo "===== A1 Create Loop Started: $(date) =====" | tee -a "$LOG"
 
+C=$(curl -sf http://169.254.169.254/opc/v1/instance/ | jq -r .compartmentId)
+T=$(curl -sf http://169.254.169.254/opc/v1/instance/ | jq -r .tenantId)
+AD=$(oci iam availability-domain list -c $C | jq -r '.data[].name')
+VCN=$(oci network vcn list -c $C|jq -r '.data[].id')
+SI=$(oci network subnet list -c $C | jq -r '.data[].id')
+
+
 I=$(imagelist | grep -m 1 "Canonical-Ubuntu-24.04-aarch64" | awk '{print $1}')
 H=$(oci iam tenancy get --tenancy-id "$C" | jq -r '.data["home-region-key"]')
 
