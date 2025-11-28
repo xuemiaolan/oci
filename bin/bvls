@@ -1,0 +1,29 @@
+source ~/.bashrc
+shopt -s expand_aliases
+oci() {
+  docker run --rm -i \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+
+bvs=$(oci bv boot-volume list -c "$C" --all)
+atts=$(oci compute boot-volume-attachment list -c "$C" --availability-domain "$AD" --all)
+insts=$(oci compute instance list -c "$C" --availability-domain "$AD" --all)
+jq -nr \
+  --slurpfile b <(printf '%s' "$bvs") \
+  --slurpfile a <(printf '%s' "$atts") \
+  --slurpfile i <(printf '%s' "$insts") '
+    ($a[0].data | map({(.["boot-volume-id"]): ."instance-id"}) | add) as $ATT
+    | ($i[0].data | map({(.id): ."display-name"}) | add) as $INST
+    | $b[0].data
+    | map({
+        bv: .id,
+        size: ."size-in-gbs",
+        vpus: ."vpus-per-gb",
+        name: ($INST[$ATT[.id]] // "")
+      })
+    | .[]
+    | [.bv, (.size|tostring), (.vpus|tostring), .name]
+    | join("\t")
+' | column -t -s $'\t'
+
