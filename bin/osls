@@ -1,0 +1,84 @@
+#!/bin/bash
+set -e
+source ~/.bashrc
+shopt -s expand_aliases
+oci() {
+  docker run --rm -i \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+
+# 使用你提供的租户 ID：export T="ocid1.tenancy.oc1......"
+TENANCY_OCID="$T"
+
+if [[ -z "$TENANCY_OCID" ]]; then
+    echo "[ERROR] Tenancy OCID \$T is not set."
+    exit 1
+fi
+
+# 你的 compartment（例如 root compartment）
+# 如果你已经 export C="ocid1.compartment...", 就会自动使用
+if [[ -z "$C" ]]; then
+    echo "[ERROR] Compartment OCID \$C is not set (root compartment)."
+    exit 1
+fi
+
+echo "=== Fetching subscribed regions for tenancy: $TENANCY_OCID ==="
+
+# 获取当前租户启用的 regions（多行输出）
+REGIONS=$(oci iam region-subscription list \
+    --tenancy-id "$TENANCY_OCID" \
+    --query "join('\n', data[].\"region-name\")" \
+    --raw-output)
+
+for REGION in $REGIONS; do
+    echo ""
+    echo "========== Region: $REGION =========="
+
+    # 获取 namespace
+    NS=$(oci --region "$REGION" os ns get \
+        --query "data" \
+        --raw-output 2>/dev/null || true)
+
+    if [[ -z "$NS" ]]; then
+        echo "[Skip] No namespace or region not accessible."
+        continue
+    fi
+    echo "Namespace: $NS"
+
+    # 获取 buckets（多行）
+    BUCKETS=$(oci --region "$REGION" os bucket list -c "$C" \
+        --query "join('\n', data[].name)" \
+        --raw-output)
+
+    if [[ -z "$BUCKETS" ]]; then
+        echo "  (No buckets)"
+        continue
+    fi
+
+    for BUCKET in $BUCKETS; do
+        echo ""
+        echo "---- Bucket: $BUCKET ----"
+
+        # 获取 objects（多行）
+        OBJECTS=$(oci --region "$REGION" os object list \
+            --bucket-name "$BUCKET" \
+            --query "join('\n', data[].name)" \
+            --raw-output)
+
+        if [[ -z "$OBJECTS" ]]; then
+            echo "    (empty bucket)"
+            continue
+        fi
+
+        for OBJECT in $OBJECTS; do
+
+            # 安全 URL 编码（支持特殊字符 + 中文）
+            ENC_OBJECT=$(jq -nr --arg x "$OBJECT" '$x|@uri')
+
+            FINAL_URL="https://objectstorage.${REGION}.oraclecloud.com/n/${NS}/b/${BUCKET}/o/${ENC_OBJECT}"
+
+            echo "$FINAL_URL"
+        done
+    done
+done
