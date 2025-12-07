@@ -1,0 +1,65 @@
+#!/bin/bash
+set -e
+source ~/.bashrc
+shopt -s expand_aliases
+oci() {
+  docker run --rm -i \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+
+# 检查参数
+if [ -z "$1" ]; then
+    echo "Usage: $0 <instance-ocid>"
+    exit 1
+fi
+
+INSTANCE_ID="$1"
+
+# 默认密钥目录
+KEY_DIR="$HOME/.oci/console"
+PRIVATE_KEY="$KEY_DIR/console.key"
+PUBLIC_KEY="$PRIVATE_KEY.pub"
+
+# 确保目录存在
+mkdir -p "$KEY_DIR"
+
+echo "[*] Checking SSH console keys in $KEY_DIR ..."
+
+# 如果私钥不存在则生成
+if [ ! -f "$PRIVATE_KEY" ]; then
+    echo "[*] No private key found. Generating new key pair..."
+    ssh-keygen -t rsa -b 2048 -f "$PRIVATE_KEY" -N ""
+else
+    echo "[*] Private key exists: $PRIVATE_KEY"
+fi
+
+# 确保公钥存在
+if [ ! -f "$PUBLIC_KEY" ]; then
+    echo "[*] Public key missing, regenerating..."
+    ssh-keygen -y -f "$PRIVATE_KEY" > "$PUBLIC_KEY"
+fi
+
+echo "[*] Using public key: $PUBLIC_KEY"
+
+# 创建 Console Connection
+echo "[*] Creating console connection for instance: $INSTANCE_ID ..."
+REL_PUBLIC_KEY=".oci/console/console.key.pub"
+
+OUTPUT=$(oci compute instance-console-connection create \
+  --instance-id "$INSTANCE_ID" \
+  --ssh-public-key-file "$REL_PUBLIC_KEY")
+
+echo "$OUTPUT"
+
+# 获取 consoleOCID
+CONSOLE_ID=$(echo "$OUTPUT" | jq -r '.data.id')
+
+echo ""
+echo "=============================================="
+echo "Serial Console Connection Created:"
+echo "Console ID: $CONSOLE_ID"
+echo "To connect, use:"
+echo ""
+echo "ssh -i $PRIVATE_KEY -o ProxyCommand='oci compute instance-console-connection get-serial-port-connection --instance-console-connection-id $CONSOLE_ID --port 0' ocid"
+echo "=============================================="

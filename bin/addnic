@@ -1,0 +1,8 @@
+source ~/.bashrc
+shopt -s expand_aliases
+oci() {
+  docker run --rm -i \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+oci compute instance attach-vnic   --instance-id "$INSTANCE_OCID"   --subnet-id "$SI"   --assign-public-ip true   --vnic-display-name "$DISPLAY_NAME"

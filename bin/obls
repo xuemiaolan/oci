@@ -62,10 +62,9 @@ for REGION in $REGIONS; do
 
         # 获取 objects（多行）
         OBJECTS=$(oci --region "$REGION" os object list \
-            --bucket-name "$BUCKET" \
-            --query "join('\n', data[].name)" \
-            --raw-output)
-
+                 --bucket-name "$BUCKET" \
+ 	 	 --query "data[].name" \
+		 | jq -r '.[]')
         if [[ -z "$OBJECTS" ]]; then
             echo "    (empty bucket)"
             continue
