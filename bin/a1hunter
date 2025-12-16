@@ -36,7 +36,7 @@ while true; do
         --display-name "$DISPLAY_NAME" \
         --subnet-id "$SI" \
         --shape VM.Standard.A1.Flex \
-        --shape-config '{"ocpus": 2, "memoryInGBs": 12}' \
+        --shape-config '{"ocpus": 4, "memoryInGBs": 24}' \
         --boot-volume-size-in-gbs 50 \
         --image-id "$I" \
         --assign-public-ip true \
