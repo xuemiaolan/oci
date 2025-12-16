@@ -27,7 +27,7 @@ while true; do
     echo "$(date) 👉 Attempting to create A1 instance..." | tee -a "$LOG"
 
     RAND=$(openssl rand -hex 2)
-    DISPLAY_NAME="$H-A1-2C12G-$RAND"
+    DISPLAY_NAME="$H-A1-4C24G-$RAND"
 
     # 捕获输出
     RESULT=$(oci compute instance launch \
