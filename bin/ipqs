@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-IPQS_KEY="fmy4Q4Neuhgr8gXxFLSJeZJIFT6hJeX6"
+IPQS_KEY="XJg97ypicTd7opQz4Qmf4bAPT6ybGI2q"
 IP="$1"
 
 if [[ -z "$IPQS_KEY" ]]; then

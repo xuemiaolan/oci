@@ -1,0 +1,15 @@
+#!/bin/bash
+
+ACCESS_KEY="aaed305ca527a477c2c51c866198292e"
+
+if [ -n "$1" ]; then
+    TARGET_IP=$1
+else
+    TARGET_IP=$(curl -s https://api.ipify.org)
+fi
+
+RESPONSE=$(curl -s "http://api.ipapi.com/api/$TARGET_IP?access_key=$ACCESS_KEY")
+
+SUCCESS=$(echo "$RESPONSE" | jq -r '.success // true')
+
+echo "$RESPONSE" | jq .

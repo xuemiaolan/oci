@@ -1,0 +1,69 @@
+#!/bin/bash
+
+# --- 配置区 ---
+ABUSE_KEY="f3b5c4f7ffb4169994477afd28bf94813648fdf7b4381ce771f79bfff0028fe36c28e084ce299c95"
+
+# 获取目标 IP
+TARGET_IP=${1:-$(curl -s https://api.ipify.org)}
+
+# 1. 获取安全情报 (AbuseIPDB)
+ABUSE_RES=$(curl -sG https://api.abuseipdb.com/api/v2/check \
+  --data-urlencode "ipAddress=$TARGET_IP" \
+  -d maxAgeInDays=90 \
+  -d verbose \
+  -H "Key: $ABUSE_KEY" \
+  -H "Accept: application/json")
+
+# 2. 获取详细地理信息 (ip-api.com - 补全邮编和区域)
+GEO_RES=$(curl -s "http://ip-api.com/json/$TARGET_IP?fields=status,country,regionName,city,zip,lat,lon,timezone")
+
+# --- 数据合并解析 ---
+A_DATA=$(echo "$ABUSE_RES" | jq -r '.data')
+
+# 提取安全字段
+CONFIDENCE=$(echo "$A_DATA" | jq -r '.abuseConfidenceScore // 0')
+USAGE_TYPE=$(echo "$A_DATA" | jq -r '.usageType // "Unknown"')
+ISP=$(echo "$A_DATA" | jq -r '.isp // "Unknown"')
+DOMAIN=$(echo "$A_DATA" | jq -r '.domain // "无"')
+TOTAL_REPORTS=$(echo "$A_DATA" | jq -r '.totalReports // 0')
+LAST_REPORT=$(echo "$A_DATA" | jq -r '.lastReportedAt // "从未被举报"')
+
+# 提取并补全地址字段
+COUNTRY=$(echo "$GEO_RES" | jq -r '.country // "未知"')
+REGION=$(echo "$GEO_RES" | jq -r '.regionName // "未知"')
+CITY=$(echo "$GEO_RES" | jq -r '.city // "未知"')
+ZIP=$(echo "$GEO_RES" | jq -r '.zip // "无"')
+LAT_LON=$(echo "$GEO_RES" | jq -r '"\(.lat), \(.lon)"')
+TIMEZONE=$(echo "$GEO_RES" | jq -r '.timezone // "未知"')
+
+# --- 打印全量汇总报告 ---
+echo "-------------------------------------------------------"
+echo "           IP 全维度深度情报报告 (Security + Geo)"
+echo "-------------------------------------------------------"
+printf "%-15s : %s\n" "目标 IP" "$TARGET_IP"
+printf "%-15s : %s%%\n" "信誉评分" "$CONFIDENCE"
+printf "%-15s : %s\n" "IP 类型" "$USAGE_TYPE"
+echo "----------------------- 地理位置 -----------------------"
+printf "%-15s : %s\n" "国家/地区" "$COUNTRY"
+printf "%-15s : %s\n" "省份/州" "$REGION"
+printf "%-15s : %s\n" "城市" "$CITY"
+printf "%-15s : %s\n" "邮政编码" "$ZIP"
+printf "%-15s : %s\n" "经纬度" "$LAT_LON"
+printf "%-15s : %s\n" "时区" "$TIMEZONE"
+echo "----------------------- 归属信息 -----------------------"
+printf "%-15s : %s\n" "运营商(ISP)" "$ISP"
+printf "%-15s : %s\n" "关联域名" "$DOMAIN"
+echo "----------------------- 风险记录 -----------------------"
+printf "%-15s : %s 次\n" "总举报数" "$TOTAL_REPORTS"
+printf "%-15s : %s\n" "最后活跃" "$LAST_REPORT"
+
+# 风险判定逻辑
+echo "----------------------- 综合评估 -----------------------"
+if [ "$CONFIDENCE" -gt 50 ]; then
+    echo "🚨 风险结论: 该 IP 被识别为活跃攻击源，建议拦截。"
+elif [ "$USAGE_TYPE" == "Data Center/Web Hosting/Transit" ]; then
+    echo "⚠️ 风险结论: 该 IP 属于数据中心/机房，可能作为代理或爬虫使用。"
+else
+    echo "✅ 风险结论: 目前状态表现良好，属于常见的 $USAGE_TYPE 流量。"
+fi
+echo "-------------------------------------------------------"
