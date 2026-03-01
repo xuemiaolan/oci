@@ -27,7 +27,7 @@ while true; do
     echo "$(date) 👉 Attempting to create A1 instance..." | tee -a "$LOG"
 
     RAND=$(openssl rand -hex 2)
-    DISPLAY_NAME="$H-A1-4C24G-$RAND"
+    DISPLAY_NAME="$H-A1-$RAND"
 
     # 捕获输出
     RESULT=$(oci compute instance launch \
@@ -36,7 +36,7 @@ while true; do
         --display-name "$DISPLAY_NAME" \
         --subnet-id "$SI" \
         --shape VM.Standard.A1.Flex \
-        --shape-config '{"ocpus": 4, "memoryInGBs": 24}' \
+        --shape-config '{"ocpus": 1, "memoryInGBs": 6}' \
         --boot-volume-size-in-gbs 50 \
         --image-id "$I" \
         --assign-public-ip true \

@@ -1,0 +1,24 @@
+#!/bin/bash
+source ~/.bashrc
+shopt -s expand_aliases
+oci() {
+  docker run --rm -i \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+
+# 确保 $C 已经存在
+echo "正在为 Compartment $C 获取资源..."
+
+# 优化查询：join(' ', @) 会把数组变成空格分隔的字符串，完美适配 for 循环
+ADS=$(oci iam availability-domain list -c $C --query "data[*].name | join(' ', @)" --raw-output)
+
+for ad in $ADS; do
+    echo -e "\n📍 Availability Domain: $ad"
+    echo "------------------------------------------------"
+    
+    # 获取该 AD 下的 Fault Domains
+    # 同样使用 join 确保输出整洁
+    oci iam fault-domain list -c $C --availability-domain "$ad" \
+        --query "data[*].name | join(', ', @)" --raw-output
+done
