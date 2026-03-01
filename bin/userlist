@@ -6,4 +6,5 @@ oci() {
     -v "$HOME/.oci:/oracle/.oci" oci "$@"
 }
 oci iam user list | jq -r '.data[] | "user: \(.name)\nemail: \(.email)\ncreate-time: \(.["time-created"])\nlast-login: \(.["last-successful-login-time"])\n"'|column -t
+oci organizations subscription list -c "$C" --all --output json | jq -r '.data.items[] | "Payment-Model: \(.["payment-model"])\nEnd-Date:      \(.["end-date"])"'
 oci iam region-subscription list | jq -r '.data[] | "region: \(.["region-name"])"'
