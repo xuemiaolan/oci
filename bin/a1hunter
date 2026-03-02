@@ -55,7 +55,7 @@ while true; do
     else
         ERR=$(echo "$JSON" | jq -r '.message // .code // "unknown error"' 2>/dev/null)
         echo "$(date) ❌ FAILED: $ERR" | tee -a "$LOG"
-	SLEEP_TIME=$(shuf -i 240-300 -n 1)
+	SLEEP_TIME=$(shuf -i 440-500 -n 1)
         echo "$(date) ⏳ Retrying in $SLEEP_TIME seconds..." | tee -a "$LOG"
         sleep $SLEEP_TIME
     fi
