@@ -1,0 +1,68 @@
+#!/bin/bash
+shopt -s expand_aliases
+
+oci() {
+  docker run --rm \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+
+LOG=~/A1loop.log
+echo "===== A1 Create Loop Started: $(date) =====" | tee -a "$LOG"
+
+# 获取基础信息
+C=$(curl -sf http://169.254.169.254/opc/v1/instance/ | jq -r .compartmentId)
+# 获取所有可用性域 (AD) 并存入数组
+readarray -t AD_LIST < <(oci iam availability-domain list -c $C | jq -r '.data[].name')
+
+VCN=$(oci network vcn list -c $C | jq -r '.data[].id')
+SI=$(oci network subnet list -c $C | jq -r '.data[].id')
+I=$(oci compute image list -c $C --all | jq -r '.data[] | select(.["operating-system"]=="Canonical Ubuntu") | "\(.id) | \(.["display-name"]) | \(.["operating-system-version"])"' | grep -m 1 "Canonical-Ubuntu-24.04-aarch64" | awk '{print $1}')
+H=$(oci iam tenancy get --tenancy-id "$C" | jq -r '.data["home-region-key"]')
+
+echo "Found ${#AD_LIST[@]} ADs. Starting low-frequency rotation..." | tee -a "$LOG"
+
+while true; do
+    for CURRENT_AD in "${AD_LIST[@]}"; do
+        echo "------------------------------------------------" | tee -a "$LOG"
+        echo "$(date) 👉 Target AD: $CURRENT_AD" | tee -a "$LOG"
+
+        RAND=$(openssl rand -hex 2)
+        DISPLAY_NAME="$H-A1-$RAND"
+
+        # 发起创建请求
+        RESULT=$(oci compute instance launch \
+            --compartment-id "$C" \
+            --availability-domain "$CURRENT_AD" \
+            --display-name "$DISPLAY_NAME" \
+            --subnet-id "$SI" \
+            --shape VM.Standard.A1.Flex \
+            --shape-config '{"ocpus": 1, "memoryInGBs": 6}' \
+            --boot-volume-size-in-gbs 50 \
+            --image-id "$I" \
+            --assign-public-ip true \
+            --ssh-authorized-keys-file .oci/id_rsa.pub \
+            --wait-for-state RUNNING 2>&1)
+
+        # 记录原始输出到日志
+        echo "$RESULT" >> "$LOG"
+
+        # 检查是否成功 (通过判断返回结果中是否有 Data ID)
+        if echo "$RESULT" | grep -q '"id": "ocid1.instance'; then
+            echo "$(date) ✅ SUCCESS: Instance created in $CURRENT_AD!" | tee -a "$LOG"
+            echo "Instance Name: $DISPLAY_NAME" | tee -a "$LOG"
+            exit 0
+        else
+            # 提取错误信息
+            ERR=$(echo "$RESULT" | sed '1{/^ServiceError:/d}' | jq -r '.message // .code // "Request Failed"' 2>/dev/null)
+            echo "$(date) ❌ FAILED in $CURRENT_AD: $ERR" | tee -a "$LOG"
+            
+            # --- 每个 AD 尝试后的随机等待 (430-500秒) ---
+            AD_SLEEP=$(shuf -i 430-500 -n 1)
+            echo "$(date) ⏳ API Protection: Waiting $AD_SLEEP seconds before next AD/Retry..." | tee -a "$LOG"
+            sleep $AD_SLEEP
+        fi
+    done
+
+    echo "===== Finished one full cycle of all ADs. Starting next round... =====" | tee -a "$LOG"
+done
