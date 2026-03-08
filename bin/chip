@@ -1,0 +1,41 @@
+#!/bin/bash
+source ~/.bashrc
+shopt -s expand_aliases
+oci() {
+  docker run --rm  \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" \
+    oci "$@"
+}
+
+INSTANCE_OCID=$1
+if [ -z "$INSTANCE_OCID" ]; then
+echo "Usage: $0 <INSTANCE_OCID>"
+exit 1
+fi
+
+VNIC_ID=$(oci compute vnic-attachment list -c $C --instance-id "$INSTANCE_OCID" --query 'data[0]."vnic-id"' --raw-output)
+echo $VNC_ID
+
+if [ -z "$VNIC_ID" ] || [ "$VNIC_ID" == "null" ]; then
+echo "Error: VNIC not found."
+exit 1
+fi
+
+PRIVATE_IP_ID=$(oci network private-ip list --vnic-id "$VNIC_ID" --query "data[0].id" --raw-output)
+
+PUBLIC_IP_OCID=$(oci network public-ip get --private-ip-id "$PRIVATE_IP_ID" --query "data.id" --raw-output 2>/dev/null)
+
+if [ -n "$PUBLIC_IP_OCID" ] && [ "$PUBLIC_IP_OCID" != "null" ]; then
+oci network public-ip delete --public-ip-id "$PUBLIC_IP_OCID" --force
+fi
+
+NEW_IP_RES=$(oci network public-ip create -c $C --display-name "AutoRefreshIP" --lifetime "EPHEMERAL" --private-ip-id "$PRIVATE_IP_ID")
+
+NEW_IP=$(echo "$NEW_IP_RES" | grep -oP '(?<="ip-address": ")[^"]+')
+
+if [ -z "$NEW_IP" ]; then
+echo "Failed to create new IP."
+else
+echo "New Public IP: $NEW_IP"
+fi

@@ -31,7 +31,7 @@ docker pull ghcr.io/oracle/oci-cli:latest
 docker tag ghcr.io/oracle/oci-cli:latest oci
 
 if ! grep -q "alias oci=" ~/.bashrc; then
-  echo "alias oci='docker run --rm -it -e \"OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True\" -v \"$HOME/.oci:/oracle/.oci\" oci'" >> ~/.bashrc
+  echo "alias oci='docker run --rm -e \"OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True\" -v \"$HOME/.oci:/oracle/.oci\" oci'" >> ~/.bashrc
 fi
 source ~/.bashrc
 
