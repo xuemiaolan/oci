@@ -6,16 +6,16 @@ oci() {
     -v "$HOME/.oci:/oracle/.oci" oci "$@"
 }
 instances=$(oci compute instance list -c "$C" --all \
-  | jq -r '.data[] | [.id, ."display-name", ."shape-config"."ocpus", ."shape-config"."memory-in-gbs"] | @tsv')
+  | jq -r '.data[] | [.id, ."display-name", ."lifecycle-state",."shape-config"."ocpus", ."shape-config"."memory-in-gbs", ."availability-domain"] | @tsv')
 
-while IFS=$'\t' read -r iid name ocpu mem; do
+while IFS=$'\t' read -r iid name state ocpu mem domain; do
   vnic=$(oci compute instance list-vnics --instance-id "$iid")
   priv_ip=$(echo "$vnic" | jq -r '.data[0]."private-ip" // empty'|xargs)
   pub_ip=$(echo "$vnic" | jq -r '.data[0]."public-ip" // empty'|xargs)
 
   bootvol_id=$(oci compute boot-volume-attachment list \
     --compartment-id "$C" \
-    --availability-domain "$AD" \
+    --availability-domain "$domain" \
     --instance-id "$iid" \
     | jq -r '.data[0]."boot-volume-id" // empty' | xargs)
 
@@ -28,8 +28,10 @@ while IFS=$'\t' read -r iid name ocpu mem; do
 
   echo -e "Instance ID: $iid"
   echo -e "Name: $name"
+  echo -e "State: $state"
   echo -e "OCPUs: $ocpu"
   echo -e "Memory: ${mem}GB"
+  echo -e "Domain: $domain"
   echo -e "BootVolume: ${bootvol_id:-N/A} (${bootvol_size} GB)"
   echo -e "Private IP: ${priv_ip:-N/A}"
   echo -e "Public IP: ${pub_ip:-N/A}"
