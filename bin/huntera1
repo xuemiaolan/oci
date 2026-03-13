@@ -38,7 +38,7 @@ while true; do
             --subnet-id "$SI" \
             --shape VM.Standard.A1.Flex \
             --shape-config '{"ocpus": 1, "memoryInGBs": 6}' \
-            --boot-volume-size-in-gbs 50 \
+            --boot-volume-size-in-gbs 100 \
             --image-id "$I" \
             --assign-public-ip true \
             --ssh-authorized-keys-file .oci/id_rsa.pub \
