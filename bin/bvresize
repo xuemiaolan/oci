@@ -1,0 +1,27 @@
+source ~/.bashrc
+shopt -s expand_aliases
+oci() {
+  docker run --rm -i \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+
+
+if [ $# -ne 2 ]; then
+    echo "用法: $0 <BOOT_VOLUME_OCID> <SIZE_IN_GB>"
+    exit 1
+fi
+
+BOOT_VOLUME_ID=$1
+SIZE=$2
+
+echo "正在将 Boot Volume ($BOOT_VOLUME_ID) 调整为 ${SIZE}GB..."
+
+oci bv boot-volume update \
+  --boot-volume-id "$BOOT_VOLUME_ID" \
+  --size-in-gbs "$SIZE" \
+  --vpus-per-gb 120 \
+  --force
+
+echo "完成。"
+
