@@ -10,8 +10,10 @@ oci() {
     -v "$HOME/.oci:/oracle/.oci" oci "$@"
 }
 
-COMPARTMENT_ID=$(curl -sf http://169.254.169.254/opc/v1/instance/ | jq -r .compartmentId)
-TENANT_ID=$(curl -sf http://169.254.169.254/opc/v1/instance/ | jq -r .tenantId)
+#COMPARTMENT_ID=$(curl -sf http://169.254.169.254/opc/v1/instance/ | jq -r .compartmentId)
+#TENANT_ID=$(curl -sf http://169.254.169.254/opc/v1/instance/ | jq -r .tenantId)
+COMPARTMENT_ID=$(oci iam user list |jq -r '.data[]."compartment-id"')
+TENANT_ID=$(oci iam user list |jq -r '.data[]."compartment-id"')
 
 echo "export C=$COMPARTMENT_ID" >> ~/.bashrc
 echo "export T=$TENANT_ID" >> ~/.bashrc
