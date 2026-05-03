@@ -1,0 +1,22 @@
+
+source ~/.bashrc
+shopt -s expand_aliases
+oci() {
+  docker run --rm  \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+services=$(oci limits service list -c "$C" --all \
+    | jq -r '.data[].name')
+
+for s in $services; do
+    values=$(oci limits value list -c "$C" --service-name "$s" --all \
+        | jq -r '.data[] | select(.value != 0) | "\(.name): \(.value)"')
+
+    # 如果没有非零值，跳过
+    [[ -z "$values" ]] && continue
+
+    echo "=== Service: $s ==="
+    echo "$values" | sed 's/^/  /'
+    echo
+done
