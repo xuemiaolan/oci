@@ -11,7 +11,8 @@ LOG=~/A1loop.log
 echo "===== A1 Create Loop Started: $(date) =====" | tee -a "$LOG"
 
 # 获取基础信息
-C=$(curl -sf http://169.254.169.254/opc/v1/instance/ | jq -r .compartmentId)
+#C=$(curl -sf http://169.254.169.254/opc/v1/instance/ | jq -r .compartmentId)
+C=$(oci iam user list |jq -r '.data[]."compartment-id"')
 # 获取所有可用性域 (AD) 并存入数组
 readarray -t AD_LIST < <(oci iam availability-domain list -c $C | jq -r '.data[].name')
 
