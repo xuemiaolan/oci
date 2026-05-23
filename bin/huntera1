@@ -6,6 +6,25 @@ oci() {
     -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
     -v "$HOME/.oci:/oracle/.oci" oci "$@"
 }
+NOTIFY_CONF="$HOME/.oci/notify.conf"
+
+if [ -f "$NOTIFY_CONF" ]; then
+    # shellcheck disable=SC1090
+    source "$NOTIFY_CONF"
+fi
+
+send_notify() {
+    local msg="$1"
+
+    if [ -z "$BOT_TOKEN" ] || [ -z "$CHAT_ID" ]; then
+        echo "$(date) ⚠️ Telegram notify config missing, skip notification." | tee -a "$LOG"
+        return 0
+    fi
+
+    curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+        -d chat_id="${CHAT_ID}" \
+        --data-urlencode text="${msg}" >/dev/null
+}
 
 LOG=~/A1loop.log
 echo "===== A1 Create Loop Started: $(date) =====" | tee -a "$LOG"
@@ -52,6 +71,8 @@ while true; do
         if echo "$RESULT" | grep -q '"id": "ocid1.instance'; then
             echo "$(date) ✅ SUCCESS: Instance created in $CURRENT_AD!" | tee -a "$LOG"
             echo "Instance Name: $DISPLAY_NAME" | tee -a "$LOG"
+	    MSG="$(date) ✅ SUCCESS: Instance created in $CURRENT_AD! Instance Name: $DISPLAY_NAME"
+            send_notify "$MSG"
             exit 0
         else
             # 提取错误信息
