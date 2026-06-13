@@ -1,0 +1,564 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ocipassinfo
+# 查看 OCI 租户、Identity Domain、用户所属组、用户命中的密码策略、
+# Domain 默认密码策略、所有密码保护策略、MFA/账号能力扩展。
+#
+# Usage:
+#   ./ocipassinfo
+#   ./ocipassinfo -d <DOMAIN_URL>
+#   ./ocipassinfo -u <USER_ID>
+#   ./ocipassinfo -d <DOMAIN_URL> -u <USER_ID>
+#
+# Required:
+#   export T=<tenancy_ocid>
+#
+# Optional:
+#   export DOMAIN_URL=<identity_domain_url>
+#   export USER_ID=<identity_domain_user_id>
+#   export OCI_PROFILE=DEFAULT
+#
+# Docker OCI CLI:
+#   export USE_DOCKER_OCI=true
+#   export OCI_CONFIG_DIR=/home/ubuntu/.oci
+#   export OCI_DOCKER_IMAGE=oci
+
+OCI_PROFILE="${OCI_PROFILE:-DEFAULT}"
+TENANCY_ID="${T:-}"
+DOMAIN_URL="${DOMAIN_URL:-}"
+USER_ID="${USER_ID:-}"
+
+USE_DOCKER_OCI="${USE_DOCKER_OCI:-auto}"
+OCI_CONFIG_DIR="${OCI_CONFIG_DIR:-/home/ubuntu/.oci}"
+OCI_DOCKER_IMAGE="${OCI_DOCKER_IMAGE:-oci}"
+
+usage() {
+  cat <<EOF
+Usage:
+  ocipassinfo
+  ocipassinfo -d <DOMAIN_URL>
+  ocipassinfo -u <USER_ID>
+  ocipassinfo -d <DOMAIN_URL> -u <USER_ID>
+
+Required:
+  export T=<tenancy_ocid>
+
+Optional:
+  export DOMAIN_URL=<identity_domain_url>
+  export USER_ID=<identity_domain_user_id>
+  export OCI_PROFILE=DEFAULT
+
+Docker OCI CLI:
+  export USE_DOCKER_OCI=true
+  export OCI_CONFIG_DIR=/home/ubuntu/.oci
+  export OCI_DOCKER_IMAGE=oci
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -d|--domain|--domain-url|--endpoint)
+      DOMAIN_URL="${2:-}"
+      shift 2
+      ;;
+    -u|--user-id)
+      USER_ID="${2:-}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "ERROR: unknown argument: $1"
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+if [[ -z "$TENANCY_ID" ]]; then
+  echo "ERROR: T is empty. Please export T as tenancy OCID first."
+  exit 1
+fi
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "ERROR: jq not found."
+  exit 1
+fi
+
+oci_cli() {
+  if [[ "$USE_DOCKER_OCI" == "true" ]]; then
+    docker run --rm \
+      -e OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True \
+      -v "${OCI_CONFIG_DIR}:/oracle/.oci" \
+      "${OCI_DOCKER_IMAGE}" "$@"
+  elif [[ "$USE_DOCKER_OCI" == "false" ]]; then
+    command oci "$@"
+  else
+    if command -v oci >/dev/null 2>&1; then
+      command oci "$@"
+    else
+      docker run --rm \
+        -e OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True \
+        -v "${OCI_CONFIG_DIR}:/oracle/.oci" \
+        "${OCI_DOCKER_IMAGE}" "$@"
+    fi
+  fi
+}
+
+line() {
+  echo "============================================================"
+}
+
+section() {
+  echo
+  line
+  echo "$1"
+  line
+}
+
+print_policy_table() {
+  local json="$1"
+
+  echo "$json" | jq -r '
+    .data.resources[]
+    | [
+        (.id // "-"),
+        (."display-name" // .name // "-"),
+        (."password-expires-after" // "null"),
+        (."password-expire-warning" // "null"),
+        (."min-length" // "null"),
+        (."min-special-chars" // "null"),
+        (."min-numerals" // "null"),
+        (."min-uppercase" // "null"),
+        (."min-lowercase" // "null"),
+        (."password-history-count" // "null"),
+        (."max-incorrect-attempts" // "null"),
+        (."lockout-duration" // "null"),
+        (.priority // "null")
+      ]
+    | @tsv
+  ' | awk 'BEGIN {
+      printf "%-30s %-30s %-8s %-8s %-8s %-8s %-8s %-8s %-8s %-8s %-10s %-10s %-8s\n", \
+        "POLICY_ID", "NAME", "EXPIRE", "WARN", "MINLEN", "SPECIAL", "NUMBER", "UPPER", "LOWER", "HISTORY", "MAX_FAIL", "LOCKOUT", "PRIOR";
+      printf "%-30s %-30s %-8s %-8s %-8s %-8s %-8s %-8s %-8s %-8s %-10s %-10s %-8s\n", \
+        "---------", "----", "------", "----", "------", "-------", "------", "-----", "-----", "-------", "--------", "-------", "------";
+    }
+    {
+      printf "%-30s %-30s %-8s %-8s %-8s %-8s %-8s %-8s %-8s %-8s %-10s %-10s %-8s\n", \
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13;
+    }'
+}
+
+print_default_policy_guess() {
+  local json="$1"
+
+  echo "$json" | jq -r '
+    [
+      .data.resources[]
+      | select(
+          (.id == "PasswordPolicy")
+          or (."display-name" == "defaultPasswordPolicy")
+          or (.name == "defaultPasswordPolicy")
+          or (.default == true)
+          or (."is-default" == true)
+        )
+    ]
+    | if length > 0 then
+        .[0]
+        | "  ID                  : \(.id // "-")\n  Name                : \(."display-name" // .name // "-")\n  Password expires    : \(."password-expires-after" // "null") days\n  Warning days        : \(."password-expire-warning" // "null")\n  Priority            : \(.priority // "null")"
+      else
+        "  Cannot determine default password policy."
+      end
+  '
+}
+
+print_domain_policy_check() {
+  local json="$1"
+  local count
+
+  count="$(echo "$json" | jq '.data.resources | length // 0')"
+
+  section "8. Domain Password Policy Basic Check"
+
+  if [[ "$count" -eq 0 ]]; then
+    echo "No password policies found."
+    return
+  fi
+
+  echo "Password policy count: $count"
+  echo
+
+  echo "Policy summary:"
+  print_policy_table "$json"
+
+  echo
+  echo "Default policy guess:"
+  print_default_policy_guess "$json"
+
+  echo
+  echo "Basic risk check:"
+  echo "$json" | jq -r '
+    .data.resources[]
+    | {
+        id: (.id // "-"),
+        name: (."display-name" // .name // "-"),
+        expires: ."password-expires-after",
+        warning: ."password-expire-warning",
+        minLength: ."min-length",
+        minSpecial: ."min-special-chars",
+        minNumerals: ."min-numerals",
+        minUpper: ."min-uppercase",
+        minLower: ."min-lowercase",
+        history: ."password-history-count",
+        maxFail: ."max-incorrect-attempts",
+        lockout: ."lockout-duration"
+      }
+    | @base64
+  ' | while read -r row; do
+    item="$(echo "$row" | base64 -d)"
+
+    id="$(echo "$item" | jq -r '.id')"
+    name="$(echo "$item" | jq -r '.name')"
+    expires="$(echo "$item" | jq -r '.expires // "null"')"
+    warning="$(echo "$item" | jq -r '.warning // "null"')"
+    min_length="$(echo "$item" | jq -r '.minLength // "null"')"
+    min_special="$(echo "$item" | jq -r '.minSpecial // "null"')"
+    min_numerals="$(echo "$item" | jq -r '.minNumerals // "null"')"
+    min_upper="$(echo "$item" | jq -r '.minUpper // "null"')"
+    min_lower="$(echo "$item" | jq -r '.minLower // "null"')"
+    history="$(echo "$item" | jq -r '.history // "null"')"
+    max_fail="$(echo "$item" | jq -r '.maxFail // "null"')"
+    lockout="$(echo "$item" | jq -r '.lockout // "null"')"
+
+    echo
+    echo "Policy: ${id} / ${name}"
+
+    if [[ "$expires" == "null" ]]; then
+      echo "  [WARN] password-expires-after is not set."
+    elif [[ "$expires" =~ ^[0-9]+$ && "$expires" -gt 180 ]]; then
+      echo "  [WARN] password expiry is longer than 180 days: $expires"
+    else
+      echo "  [OK]   password expiry days: $expires"
+    fi
+
+    if [[ "$warning" == "null" ]]; then
+      echo "  [INFO] password-expire-warning is not set."
+    else
+      echo "  [OK]   password expire warning days: $warning"
+    fi
+
+    if [[ "$min_length" == "null" ]]; then
+      echo "  [INFO] min-length not returned."
+    elif [[ "$min_length" =~ ^[0-9]+$ && "$min_length" -lt 12 ]]; then
+      echo "  [WARN] min-length is less than 12: $min_length"
+    else
+      echo "  [OK]   min-length: $min_length"
+    fi
+
+    if [[ "$min_special" == "null" ]]; then
+      echo "  [INFO] min-special-chars not returned."
+    elif [[ "$min_special" =~ ^[0-9]+$ && "$min_special" -lt 1 ]]; then
+      echo "  [WARN] special character is not required."
+    else
+      echo "  [OK]   special character required: $min_special"
+    fi
+
+    if [[ "$min_numerals" == "null" ]]; then
+      echo "  [INFO] min-numerals not returned."
+    elif [[ "$min_numerals" =~ ^[0-9]+$ && "$min_numerals" -lt 1 ]]; then
+      echo "  [WARN] number is not required."
+    else
+      echo "  [OK]   number required: $min_numerals"
+    fi
+
+    if [[ "$min_upper" == "null" ]]; then
+      echo "  [INFO] min-uppercase not returned."
+    elif [[ "$min_upper" =~ ^[0-9]+$ && "$min_upper" -lt 1 ]]; then
+      echo "  [WARN] uppercase character is not required."
+    else
+      echo "  [OK]   uppercase required: $min_upper"
+    fi
+
+    if [[ "$min_lower" == "null" ]]; then
+      echo "  [INFO] min-lowercase not returned."
+    elif [[ "$min_lower" =~ ^[0-9]+$ && "$min_lower" -lt 1 ]]; then
+      echo "  [WARN] lowercase character is not required."
+    else
+      echo "  [OK]   lowercase required: $min_lower"
+    fi
+
+    if [[ "$history" == "null" ]]; then
+      echo "  [INFO] password-history-count not returned."
+    elif [[ "$history" =~ ^[0-9]+$ && "$history" -lt 5 ]]; then
+      echo "  [WARN] password history count is less than 5: $history"
+    else
+      echo "  [OK]   password history count: $history"
+    fi
+
+    if [[ "$max_fail" == "null" ]]; then
+      echo "  [INFO] max-incorrect-attempts not returned."
+    elif [[ "$max_fail" =~ ^[0-9]+$ && "$max_fail" -gt 10 ]]; then
+      echo "  [WARN] max incorrect attempts is greater than 10: $max_fail"
+    else
+      echo "  [OK]   max incorrect attempts: $max_fail"
+    fi
+
+    if [[ "$lockout" == "null" ]]; then
+      echo "  [INFO] lockout-duration not returned."
+    else
+      echo "  [OK]   lockout duration: $lockout"
+    fi
+  done
+}
+
+section "OCI Password Information Audit"
+echo "Tenancy OCID     : $TENANCY_ID"
+echo "OCI Profile      : $OCI_PROFILE"
+echo "USE_DOCKER_OCI   : $USE_DOCKER_OCI"
+echo "OCI_CONFIG_DIR   : $OCI_CONFIG_DIR"
+echo "OCI_DOCKER_IMAGE : $OCI_DOCKER_IMAGE"
+
+section "1. Classic IAM Authentication Policy"
+
+CLASSIC_POLICY_JSON="$(oci_cli iam authentication-policy get \
+  --profile "$OCI_PROFILE" \
+  --compartment-id "$TENANCY_ID" \
+  --output json 2>/dev/null || true)"
+
+if [[ -z "$CLASSIC_POLICY_JSON" ]]; then
+  echo "Cannot read classic IAM authentication policy."
+else
+  echo "$CLASSIC_POLICY_JSON" | jq '.data."password-policy" // {}'
+fi
+
+section "2. Identity Domains"
+
+DOMAINS_JSON="$(oci_cli iam domain list \
+  --profile "$OCI_PROFILE" \
+  --compartment-id "$TENANCY_ID" \
+  --all \
+  --output json)"
+
+echo "$DOMAINS_JSON" | jq -r '
+  .data[]
+  | [
+      (."display-name" // "-"),
+      (.id // "-"),
+      (.url // "-"),
+      (."lifecycle-state" // "-")
+    ]
+  | @tsv
+' | awk 'BEGIN {
+    printf "%-30s %-35s %-65s %-15s\n", "DOMAIN_NAME", "DOMAIN_ID", "DOMAIN_URL", "STATE";
+    printf "%-30s %-35s %-65s %-15s\n", "-----------", "---------", "----------", "-----";
+  }
+  {
+    printf "%-30s %-35s %-65s %-15s\n", $1, $2, $3, $4;
+  }'
+
+if [[ -z "$DOMAIN_URL" ]]; then
+  DOMAIN_URL="$(echo "$DOMAINS_JSON" | jq -r '.data[0].url // empty')"
+fi
+
+if [[ -z "$DOMAIN_URL" || "$DOMAIN_URL" == "null" ]]; then
+  echo "ERROR: Cannot determine DOMAIN_URL."
+  exit 1
+fi
+
+echo
+echo "Selected DOMAIN_URL: $DOMAIN_URL"
+
+section "3. User Information"
+
+if [[ -z "$USER_ID" ]]; then
+  USER_ID="$(oci_cli identity-domains users list \
+    --profile "$OCI_PROFILE" \
+    --endpoint "$DOMAIN_URL" \
+    --all \
+    --query 'data.resources[0].id' \
+    --raw-output)"
+fi
+
+if [[ -z "$USER_ID" || "$USER_ID" == "null" ]]; then
+  echo "ERROR: Cannot determine USER_ID."
+  exit 1
+fi
+
+USER_JSON="$(oci_cli identity-domains user get \
+  --profile "$OCI_PROFILE" \
+  --endpoint "$DOMAIN_URL" \
+  --user-id "$USER_ID" \
+  --output json)"
+
+echo "$USER_JSON" | jq -r '
+  .data
+  | {
+      id: .id,
+      ocid: .ocid,
+      userName: ."user-name",
+      displayName: ."display-name",
+      active: .active,
+      userType: ."user-type",
+      tenancyOcid: ."tenancy-ocid",
+      domainOcid: ."domain-ocid",
+      compartmentOcid: ."compartment-ocid"
+    }
+'
+
+section "4. User Groups"
+
+GROUPS_JSON="$(echo "$USER_JSON" | jq '.data.groups // []')"
+GROUP_COUNT="$(echo "$GROUPS_JSON" | jq 'length')"
+
+if [[ "$GROUP_COUNT" -eq 0 ]]; then
+  echo "No groups found on this user."
+else
+  echo "$GROUPS_JSON" | jq -r '
+    .[]
+    | [
+        (.value // .id // "-"),
+        (.display // ."display-name" // "-"),
+        (."$ref" // .ref // "-")
+      ]
+    | @tsv
+  ' | awk 'BEGIN {
+      printf "%-40s %-35s %-80s\n", "GROUP_ID", "GROUP_NAME", "REF";
+      printf "%-40s %-35s %-80s\n", "--------", "----------", "---";
+    }
+    {
+      printf "%-40s %-35s %-80s\n", $1, $2, $3;
+    }'
+fi
+
+section "5. User Password State and Applicable Policy"
+
+PASSWORD_STATE_JSON="$(echo "$USER_JSON" | jq '.data."urn-ietf-params-scim-schemas-oracle-idcs-extension-password-state-user" // {}')"
+
+echo "Password State Extension:"
+echo "$PASSWORD_STATE_JSON" | jq '.'
+
+APPLICABLE_POLICY_REF="$(echo "$PASSWORD_STATE_JSON" | jq -r '
+  ."applicable-password-policy"."$ref"
+  //
+  ."applicable-password-policy".ref
+  //
+  ."applicable-password-policy".value
+  //
+  empty
+' 2>/dev/null || true)"
+
+APPLICABLE_POLICY_ID=""
+if [[ -n "$APPLICABLE_POLICY_REF" && "$APPLICABLE_POLICY_REF" != "null" ]]; then
+  APPLICABLE_POLICY_ID="$(echo "$APPLICABLE_POLICY_REF" | awk -F/ '{print $NF}')"
+fi
+
+if [[ -z "$APPLICABLE_POLICY_ID" ]]; then
+  APPLICABLE_POLICY_ID="$(echo "$PASSWORD_STATE_JSON" | jq -r '
+    ."applicable-password-policy".display
+    //
+    empty
+  ' 2>/dev/null || true)"
+fi
+
+if [[ -z "$APPLICABLE_POLICY_ID" || "$APPLICABLE_POLICY_ID" == "null" ]]; then
+  echo
+  echo "Applicable Password Policy: not returned by user object."
+else
+  echo
+  echo "Applicable Password Policy ID from user object: $APPLICABLE_POLICY_ID"
+fi
+
+section "6. All Password Policies in Domain"
+
+POLICIES_JSON="$(oci_cli identity-domains password-policies list \
+  --profile "$OCI_PROFILE" \
+  --endpoint "$DOMAIN_URL" \
+  --all \
+  --output json)"
+
+print_policy_table "$POLICIES_JSON"
+
+section "7. Effective Password Policy Result"
+
+if [[ -n "$APPLICABLE_POLICY_ID" && "$APPLICABLE_POLICY_ID" != "null" ]]; then
+  echo "Applicable Password Policy ID from user object: $APPLICABLE_POLICY_ID"
+  echo
+  oci_cli identity-domains password-policy get \
+    --profile "$OCI_PROFILE" \
+    --endpoint "$DOMAIN_URL" \
+    --password-policy-id "$APPLICABLE_POLICY_ID" \
+    --query 'data.{
+      id:id,
+      name:"display-name",
+      passwordExpiresAfter:"password-expires-after",
+      passwordExpireWarning:"password-expire-warning",
+      minLength:"min-length",
+      maxLength:"max-length",
+      minAlphas:"min-alphas",
+      minNumerals:"min-numerals",
+      minSpecialChars:"min-special-chars",
+      minUpperCase:"min-uppercase",
+      minLowerCase:"min-lowercase",
+      passwordHistoryCount:"password-history-count",
+      maxIncorrectAttempts:"max-incorrect-attempts",
+      lockoutDuration:"lockout-duration",
+      priority:priority
+    }' \
+    --output json 2>/dev/null || echo "Cannot read applicable password policy detail."
+else
+  echo "Applicable Password Policy: not returned by user object."
+  echo "Fallback guess based on domain default policy:"
+  print_default_policy_guess "$POLICIES_JSON"
+fi
+
+print_domain_policy_check "$POLICIES_JSON"
+
+section "9. Password Policy Protection Details"
+
+echo "$POLICIES_JSON" | jq -r '
+  .data.resources[]
+  | {
+      id: .id,
+      name: (."display-name" // .name),
+      passwordExpiresAfter: ."password-expires-after",
+      passwordExpireWarning: ."password-expire-warning",
+      minLength: ."min-length",
+      maxLength: ."max-length",
+      minAlphas: ."min-alphas",
+      minNumerals: ."min-numerals",
+      minSpecialChars: ."min-special-chars",
+      minUpperCase: ."min-uppercase",
+      minLowerCase: ."min-lowercase",
+      passwordHistoryCount: ."password-history-count",
+      maxIncorrectAttempts: ."max-incorrect-attempts",
+      lockoutDuration: ."lockout-duration",
+      priority: .priority,
+      groups: .groups
+    }
+'
+
+section "10. MFA and Account Protection Related User Extensions"
+
+echo "Capabilities Extension:"
+echo "$USER_JSON" | jq '.data."urn-ietf-params-scim-schemas-oracle-idcs-extension-capabilities-user" // {}'
+
+echo
+echo "MFA Extension:"
+echo "$USER_JSON" | jq '.data."urn-ietf-params-scim-schemas-oracle-idcs-extension-mfa-user" // {}'
+
+echo
+echo "User State Extension:"
+echo "$USER_JSON" | jq '.data."urn-ietf-params-scim-schemas-oracle-idcs-extension-user-state-user" // {}'
+
+echo
+echo "Passwordless Extension:"
+echo "$USER_JSON" | jq '.data."urn-ietf-params-scim-schemas-oracle-idcs-extension-passwordless-user" // {}'
+
+echo
+line
+echo "Completed."
+line
+

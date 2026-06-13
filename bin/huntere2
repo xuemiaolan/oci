@@ -1,0 +1,228 @@
+#!/bin/bash
+set -u
+shopt -s expand_aliases
+
+# =========================
+# OCI Docker CLI wrapper
+# =========================
+oci() {
+  docker run --rm -i \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" \
+    oci "$@"
+}
+
+# =========================
+# Basic config
+# =========================
+LOG="${LOG:-$HOME/E2loop.log}"
+NOTIFY_CONF="$HOME/.oci/notify.conf"
+
+# Required:
+#   export C='ocid1.compartment.oc1..xxxx'
+# Optional:
+#   export SI='ocid1.subnet.oc1..xxxx'
+#   export OCI_REGION='ap-tokyo-1'
+#   export SSH_KEY_FILE="$HOME/.oci/id_rsa.pub"
+
+: "${C:?Please set C as compartment OCID}"
+SSH_KEY_FILE="${SSH_KEY_FILE:-/oracle/.oci/id_rsa.pub}"
+
+if [ -f "$NOTIFY_CONF" ]; then
+  # shellcheck disable=SC1090
+  source "$NOTIFY_CONF"
+fi
+
+send_notify() {
+  local msg="$1"
+
+  if [ -z "${BOT_TOKEN:-}" ] || [ -z "${CHAT_ID:-}" ]; then
+    echo "$(date) Telegram notify config missing, skip notification." | tee -a "$LOG"
+    return 0
+  fi
+
+  curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+    -d chat_id="${CHAT_ID}" \
+    --data-urlencode text="${msg}" >/dev/null || true
+}
+
+echo "===== E2 Create Loop Started: $(date) =====" | tee -a "$LOG"
+echo "Compartment: $C" | tee -a "$LOG"
+
+# =========================
+# Get AD list
+# =========================
+readarray -t AD_LIST < <(
+  oci iam availability-domain list \
+    --compartment-id "$C" \
+    | jq -r '.data[].name'
+)
+
+if [ "${#AD_LIST[@]}" -eq 0 ]; then
+  echo "$(date) ERROR: No availability domain found." | tee -a "$LOG"
+  exit 1
+fi
+
+echo "Found ${#AD_LIST[@]} ADs:" | tee -a "$LOG"
+printf '%s\n' "${AD_LIST[@]}" | tee -a "$LOG"
+
+# =========================
+# Get Ubuntu 24.04 x86 image
+# =========================
+echo "$(date) Searching Ubuntu 24.04 x86 image..." | tee -a "$LOG"
+
+I=$(
+  oci compute image list \
+    --compartment-id "$C" \
+    --all \
+    | jq -r '
+      .data[]
+      | select(.["operating-system"] == "Canonical Ubuntu")
+      | select(.["display-name"] | test("Canonical-Ubuntu-24.04"))
+      | select(.["display-name"] | test("aarch64") | not)
+      | select(.["display-name"] | test("Minimal") | not)
+      | [.id, .["display-name"]]
+      | @tsv
+    ' \
+    | sort -k2r \
+    | head -n 1 \
+    | awk '{print $1}'
+)
+
+if [ -z "$I" ] || [ "$I" = "null" ]; then
+  echo "$(date) ERROR: Ubuntu 24.04 x86 image not found." | tee -a "$LOG"
+  exit 1
+fi
+
+echo "Image ID: $I" | tee -a "$LOG"
+
+# =========================
+# Get tenancy/home-region-key label
+# =========================
+TENANCY_ID=$(
+  oci iam user list 2>/dev/null \
+    | jq -r '.data[0]."compartment-id" // empty'
+)
+
+if [ -n "$TENANCY_ID" ]; then
+  H=$(
+    oci iam tenancy get \
+      --tenancy-id "$TENANCY_ID" 2>/dev/null \
+      | jq -r '.data["home-region-key"] // empty'
+  )
+else
+  H=""
+fi
+
+if [ -z "$H" ]; then
+  H="${OCI_REGION:-OCI}"
+fi
+
+COUNTRY=$(curl -s --max-time 5 https://ipinfo.io/country 2>/dev/null || true)
+COUNTRY="${COUNTRY:-XX}"
+
+# =========================
+# Subnet selector
+# If SI is set, use SI directly.
+# If SI is not set, select one subnet automatically:
+#   1. regional subnet, or
+#   2. subnet matching current AD
+# =========================
+pick_subnet_for_ad() {
+  local current_ad="$1"
+
+  if [ -n "${SI:-}" ]; then
+    echo "$SI"
+    return 0
+  fi
+
+  oci network subnet list \
+    --compartment-id "$C" \
+    --all \
+    | jq -r --arg ad "$current_ad" '
+      .data[]
+      | select(."lifecycle-state" == "AVAILABLE")
+      | select((."availability-domain" == null) or (."availability-domain" == $ad))
+      | .id
+    ' \
+    | head -n 1
+}
+
+# =========================
+# Main loop
+# =========================
+echo "$(date) Starting E2 low-frequency rotation..." | tee -a "$LOG"
+
+while true; do
+  for CURRENT_AD in "${AD_LIST[@]}"; do
+    echo "------------------------------------------------" | tee -a "$LOG"
+    echo "$(date) Target AD: $CURRENT_AD" | tee -a "$LOG"
+
+    CURRENT_SI=$(pick_subnet_for_ad "$CURRENT_AD")
+
+    if [ -z "$CURRENT_SI" ] || [ "$CURRENT_SI" = "null" ]; then
+      echo "$(date) FAILED: No usable subnet found for $CURRENT_AD" | tee -a "$LOG"
+      AD_SLEEP=$(shuf -i 430-500 -n 1)
+      echo "$(date) Waiting $AD_SLEEP seconds..." | tee -a "$LOG"
+      sleep "$AD_SLEEP"
+      continue
+    fi
+
+    RAND=$(openssl rand -hex 2)
+    DISPLAY_NAME="${COUNTRY}-${H}-E2-${RAND}"
+
+    echo "$(date) Launching instance: $DISPLAY_NAME" | tee -a "$LOG"
+    echo "$(date) Subnet: $CURRENT_SI" | tee -a "$LOG"
+
+    RESULT=$(
+      oci compute instance launch \
+        --compartment-id "$C" \
+        --availability-domain "$CURRENT_AD" \
+        --display-name "$DISPLAY_NAME" \
+        --subnet-id "$CURRENT_SI" \
+        --shape VM.Standard.E2.1.Micro \
+        --shape-config '{"ocpus": 1, "memoryInGBs": 1}' \
+        --boot-volume-size-in-gbs 50 \
+        --image-id "$I" \
+        --assign-public-ip true \
+        --ssh-authorized-keys-file "$SSH_KEY_FILE" \
+        --wait-for-state RUNNING 2>&1
+    )
+
+    echo "$RESULT" >> "$LOG"
+
+    if echo "$RESULT" | grep -q '"id": "ocid1.instance'; then
+      INSTANCE_ID=$(echo "$RESULT" | jq -r '.data.id // empty' 2>/dev/null)
+      PUBLIC_IP=$(echo "$RESULT" | jq -r '.data."display-name" // empty' 2>/dev/null)
+
+      echo "$(date) SUCCESS: Instance created in $CURRENT_AD" | tee -a "$LOG"
+      echo "Instance Name: $DISPLAY_NAME" | tee -a "$LOG"
+      echo "Instance ID: $INSTANCE_ID" | tee -a "$LOG"
+
+      MSG="$(date) SUCCESS: E2 instance created
+AD: $CURRENT_AD
+Name: $DISPLAY_NAME
+Instance: $INSTANCE_ID"
+
+      send_notify "$MSG"
+      exit 0
+    fi
+
+    ERR=$(
+      echo "$RESULT" \
+        | sed '1{/^ServiceError:/d}' \
+        | jq -r '.message // .code // empty' 2>/dev/null
+    )
+
+    if [ -z "$ERR" ]; then
+      ERR=$(echo "$RESULT" | tail -n 5)
+    fi
+
+    echo "$(date) FAILED in $CURRENT_AD: $ERR" | tee -a "$LOG"
+
+    AD_SLEEP=$(shuf -i 430-500 -n 1)
+    echo "$(date) Waiting $AD_SLEEP seconds before next AD/retry..." | tee -a "$LOG"
+    sleep "$AD_SLEEP"
+  done
+
+  echo "===== Finished one full AD cycle: $(date). Starting next round... =====" | tee -a "$LOG"
