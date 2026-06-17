@@ -79,8 +79,8 @@ while true; do
             ERR=$(echo "$RESULT" | sed '1{/^ServiceError:/d}' | jq -r '.message // .code // "Request Failed"' 2>/dev/null)
             echo "$(date) ❌ FAILED in $CURRENT_AD: $ERR" | tee -a "$LOG"
             
-            # --- 每个 AD 尝试后的随机等待 (80-100秒) ---
-            AD_SLEEP=$(shuf -i 80-100 -n 1)
+            # --- 每个 AD 尝试后的随机等待 (120-180秒) ---
+            AD_SLEEP=$(shuf -i 120-180 -n 1)
             echo "$(date) ⏳ API Protection: Waiting $AD_SLEEP seconds before next AD/Retry..." | tee -a "$LOG"
             sleep $AD_SLEEP
         fi
