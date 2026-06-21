@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SCRIPT_DIR="~/scripts"
+SCRIPT_DIR="$HOME/scripts"
 SCRIPT_PATH="$SCRIPT_DIR/cleanlogs.sh"
 
 mkdir -p "$SCRIPT_DIR"
