@@ -1,0 +1,404 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# =========================
+# OCI Docker CLI wrapper
+# =========================
+oci() {
+  docker run --rm -i \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" oci "$@"
+}
+
+# =========================
+# Basic config
+# =========================
+CONFIG_FILE="$HOME/.oci/config"
+PROFILE="${PROFILE:-DEFAULT}"
+LOG="${LOG:-$HOME/create-oci-network.log}"
+
+if [ ! -f "$CONFIG_FILE" ]; then
+  echo "ERROR: OCI config not found: $CONFIG_FILE"
+  exit 1
+fi
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "ERROR: jq is required."
+  echo "Install it with:"
+  echo "sudo apt-get update && sudo apt-get install -y jq"
+  exit 1
+fi
+
+# =========================
+# Read OCI config value
+# Supports:
+# [DEFAULT]
+# [DEFAULT] with spaces
+# region=us-chicago-1
+# region = us-chicago-1
+# Windows CRLF
+# comments after values
+# =========================
+get_oci_config_value() {
+  local key="$1"
+
+  awk -v profile="$PROFILE" -v key="$key" '
+    BEGIN {
+      found = 0
+      target = "[" profile "]"
+    }
+
+    {
+      gsub(/\r/, "", $0)
+    }
+
+    /^[[:space:]]*\[/ {
+      line = $0
+      sub(/^[[:space:]]*/, "", line)
+      sub(/[[:space:]]*$/, "", line)
+      sub(/[[:space:]]*[#;].*$/, "", line)
+      found = (line == target)
+      next
+    }
+
+    found {
+      line = $0
+      sub(/[[:space:]]*[#;].*$/, "", line)
+
+      if (line !~ /=/) {
+        next
+      }
+
+      split(line, arr, "=")
+
+      k = arr[1]
+      v = arr[2]
+
+      sub(/^[[:space:]]*/, "", k)
+      sub(/[[:space:]]*$/, "", k)
+      sub(/^[[:space:]]*/, "", v)
+      sub(/[[:space:]]*$/, "", v)
+
+      if (k == key) {
+        print v
+        exit
+      }
+    }
+  ' "$CONFIG_FILE"
+}
+
+# =========================
+# Auto get compartment and region
+# C can be manually overridden.
+# If C is not set, use tenancy as root compartment.
+# =========================
+C="${C:-$(get_oci_config_value tenancy)}"
+OCI_REGION="${OCI_REGION:-$(get_oci_config_value region)}"
+
+if [ -z "$C" ]; then
+  echo "ERROR: Cannot get tenancy from $CONFIG_FILE profile [$PROFILE]"
+  echo
+  echo "Check with:"
+  echo "grep -A10 '^\\[$PROFILE\\]' $CONFIG_FILE"
+  echo
+  echo "Or run with:"
+  echo "C='ocid1.compartment.oc1..xxxx' ./create-oci-network.sh"
+  exit 1
+fi
+
+if [ -z "$OCI_REGION" ]; then
+  echo "ERROR: Cannot get region from $CONFIG_FILE profile [$PROFILE]"
+  echo
+  echo "Your config should contain something like:"
+  echo "region=us-chicago-1"
+  echo
+  echo "Or run with:"
+  echo "OCI_REGION=us-chicago-1 ./create-oci-network.sh"
+  exit 1
+fi
+
+# =========================
+# Region short name
+# us-chicago-1    -> chicago
+# ap-tokyo-1      -> tokyo
+# eu-amsterdam-1 -> amsterdam
+# uk-london-1    -> london
+# =========================
+REGION_SHORT="$(
+  echo "$OCI_REGION" \
+    | sed 's/^ap-//' \
+    | sed 's/^eu-//' \
+    | sed 's/^us-//' \
+    | sed 's/^uk-//' \
+    | sed 's/^me-//' \
+    | sed 's/^sa-//' \
+    | sed 's/^ca-//' \
+    | sed 's/^af-//' \
+    | sed 's/-[0-9]$//'
+)"
+
+# =========================
+# Network object names
+# =========================
+VCN_NAME="${REGION_SHORT}-vcn"
+VCN_CIDR="10.0.0.0/16"
+
+SUBNET_NAME="${REGION_SHORT}-subnet"
+SUBNET_CIDR="10.0.0.0/24"
+
+IGW_NAME="${REGION_SHORT}-igw"
+ROUTE_TABLE_NAME="${REGION_SHORT}-rt"
+SEC_LIST_NAME="${REGION_SHORT}-sl"
+
+DNS_LABEL_VCN="vcn"
+DNS_LABEL_SUBNET="subnet"
+
+echo "============================================================" | tee -a "$LOG"
+echo "OCI Network Create Started: $(date)" | tee -a "$LOG"
+echo "Profile:     $PROFILE" | tee -a "$LOG"
+echo "Region:      $OCI_REGION" | tee -a "$LOG"
+echo "RegionShort: $REGION_SHORT" | tee -a "$LOG"
+echo "Compartment: $C" | tee -a "$LOG"
+echo "VCN Name:    $VCN_NAME" | tee -a "$LOG"
+echo "Subnet Name: $SUBNET_NAME" | tee -a "$LOG"
+echo "============================================================" | tee -a "$LOG"
+
+# =========================
+# 1. Create VCN
+# =========================
+echo "[1/5] Creating VCN..." | tee -a "$LOG"
+
+VCN_ID="$(
+  oci network vcn create \
+    --region "$OCI_REGION" \
+    --compartment-id "$C" \
+    --display-name "$VCN_NAME" \
+    --cidr-block "$VCN_CIDR" \
+    --dns-label "$DNS_LABEL_VCN" \
+    --wait-for-state AVAILABLE \
+    | jq -r '.data.id'
+)"
+
+if [ -z "$VCN_ID" ] || [ "$VCN_ID" = "null" ]; then
+  echo "ERROR: Failed to create VCN." | tee -a "$LOG"
+  exit 1
+fi
+
+echo "VCN_ID=$VCN_ID" | tee -a "$LOG"
+
+# =========================
+# 2. Create Internet Gateway
+# =========================
+echo "[2/5] Creating Internet Gateway..." | tee -a "$LOG"
+
+IGW_ID="$(
+  oci network internet-gateway create \
+    --region "$OCI_REGION" \
+    --compartment-id "$C" \
+    --vcn-id "$VCN_ID" \
+    --display-name "$IGW_NAME" \
+    --is-enabled true \
+    --wait-for-state AVAILABLE \
+    | jq -r '.data.id'
+)"
+
+if [ -z "$IGW_ID" ] || [ "$IGW_ID" = "null" ]; then
+  echo "ERROR: Failed to create Internet Gateway." | tee -a "$LOG"
+  exit 1
+fi
+
+echo "IGW_ID=$IGW_ID" | tee -a "$LOG"
+
+# =========================
+# 3. Create Route Table
+# =========================
+echo "[3/5] Creating Route Table..." | tee -a "$LOG"
+
+ROUTE_RULES_JSON="$(
+  jq -n --arg igw "$IGW_ID" '
+  [
+    {
+      "cidrBlock": "0.0.0.0/0",
+      "networkEntityId": $igw
+    }
+  ]'
+)"
+
+ROUTE_TABLE_ID="$(
+  oci network route-table create \
+    --region "$OCI_REGION" \
+    --compartment-id "$C" \
+    --vcn-id "$VCN_ID" \
+    --display-name "$ROUTE_TABLE_NAME" \
+    --route-rules "$ROUTE_RULES_JSON" \
+    --wait-for-state AVAILABLE \
+    | jq -r '.data.id'
+)"
+
+if [ -z "$ROUTE_TABLE_ID" ] || [ "$ROUTE_TABLE_ID" = "null" ]; then
+  echo "ERROR: Failed to create Route Table." | tee -a "$LOG"
+  exit 1
+fi
+
+echo "ROUTE_TABLE_ID=$ROUTE_TABLE_ID" | tee -a "$LOG"
+
+# =========================
+# 4. Create Security List
+# =========================
+echo "[4/5] Creating Security List..." | tee -a "$LOG"
+
+EGRESS_RULES_JSON='[
+  {
+    "destination": "0.0.0.0/0",
+    "protocol": "all",
+    "isStateless": false
+  }
+]'
+
+INGRESS_RULES_JSON='[
+  {
+    "source": "0.0.0.0/0",
+    "protocol": "6",
+    "isStateless": false,
+    "tcpOptions": {
+      "destinationPortRange": {
+        "min": 22,
+        "max": 22
+      }
+    }
+  },
+  {
+    "source": "0.0.0.0/0",
+    "protocol": "6",
+    "isStateless": false,
+    "tcpOptions": {
+      "destinationPortRange": {
+        "min": 80,
+        "max": 80
+      }
+    }
+  },
+  {
+    "source": "0.0.0.0/0",
+    "protocol": "6",
+    "isStateless": false,
+    "tcpOptions": {
+      "destinationPortRange": {
+        "min": 443,
+        "max": 443
+      }
+    }
+  },
+  {
+    "source": "0.0.0.0/0",
+    "protocol": "6",
+    "isStateless": false,
+    "tcpOptions": {
+      "destinationPortRange": {
+        "min": 48255,
+        "max": 48255
+      }
+    }
+  },
+  {
+    "source": "0.0.0.0/0",
+    "protocol": "17",
+    "isStateless": false,
+    "udpOptions": {
+      "destinationPortRange": {
+        "min": 8443,
+        "max": 8443
+      }
+    }
+  },
+  {
+    "source": "0.0.0.0/0",
+    "protocol": "1",
+    "isStateless": false,
+    "icmpOptions": {
+      "type": 3
+    }
+  },
+  {
+    "source": "10.0.0.0/16",
+    "protocol": "1",
+    "isStateless": false,
+    "icmpOptions": {
+      "type": 3,
+      "code": 4
+    }
+  }
+]'
+
+SECURITY_LIST_ID="$(
+  oci network security-list create \
+    --region "$OCI_REGION" \
+    --compartment-id "$C" \
+    --vcn-id "$VCN_ID" \
+    --display-name "$SEC_LIST_NAME" \
+    --egress-security-rules "$EGRESS_RULES_JSON" \
+    --ingress-security-rules "$INGRESS_RULES_JSON" \
+    --wait-for-state AVAILABLE \
+    | jq -r '.data.id'
+)"
+
+if [ -z "$SECURITY_LIST_ID" ] || [ "$SECURITY_LIST_ID" = "null" ]; then
+  echo "ERROR: Failed to create Security List." | tee -a "$LOG"
+  exit 1
+fi
+
+echo "SECURITY_LIST_ID=$SECURITY_LIST_ID" | tee -a "$LOG"
+
+# =========================
+# 5. Create Public Subnet
+# =========================
+echo "[5/5] Creating Public Subnet..." | tee -a "$LOG"
+
+SUBNET_ID="$(
+  oci network subnet create \
+    --region "$OCI_REGION" \
+    --compartment-id "$C" \
+    --vcn-id "$VCN_ID" \
+    --display-name "$SUBNET_NAME" \
+    --cidr-block "$SUBNET_CIDR" \
+    --dns-label "$DNS_LABEL_SUBNET" \
+    --route-table-id "$ROUTE_TABLE_ID" \
+    --security-list-ids "[\"$SECURITY_LIST_ID\"]" \
+    --prohibit-public-ip-on-vnic false \
+    --wait-for-state AVAILABLE \
+    | jq -r '.data.id'
+)"
+
+if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" = "null" ]; then
+  echo "ERROR: Failed to create Subnet." | tee -a "$LOG"
+  exit 1
+fi
+
+echo "SUBNET_ID=$SUBNET_ID" | tee -a "$LOG"
+
+echo
+echo "============================================================" | tee -a "$LOG"
+echo "OCI network created successfully." | tee -a "$LOG"
+echo "============================================================" | tee -a "$LOG"
+echo "export C='$C'" | tee -a "$LOG"
+echo "export OCI_REGION='$OCI_REGION'" | tee -a "$LOG"
+echo "export VCN_ID='$VCN_ID'" | tee -a "$LOG"
+echo "export IGW_ID='$IGW_ID'" | tee -a "$LOG"
+echo "export ROUTE_TABLE_ID='$ROUTE_TABLE_ID'" | tee -a "$LOG"
+echo "export SECURITY_LIST_ID='$SECURITY_LIST_ID'" | tee -a "$LOG"
+echo "export SI='$SUBNET_ID'" | tee -a "$LOG"
+echo "============================================================" | tee -a "$LOG"
+
+cat <<EOF
+
+Use these variables:
+
+export C='$C'
+export OCI_REGION='$OCI_REGION'
+export VCN_ID='$VCN_ID'
+export IGW_ID='$IGW_ID'
+export ROUTE_TABLE_ID='$ROUTE_TABLE_ID'
+export SECURITY_LIST_ID='$SECURITY_LIST_ID'
+export SI='$SUBNET_ID'
+
+EOF
