@@ -20,12 +20,14 @@ NOTIFY_CONF="$HOME/.oci/notify.conf"
 
 # Required:
 #   export C='ocid1.compartment.oc1..xxxx'
+#
 # Optional:
 #   export SI='ocid1.subnet.oc1..xxxx'
 #   export OCI_REGION='ap-tokyo-1'
-#   export SSH_KEY_FILE="$HOME/.oci/id_rsa.pub"
+#   export SSH_KEY_FILE='/oracle/.oci/id_rsa.pub'
 
 : "${C:?Please set C as compartment OCID}"
+
 SSH_KEY_FILE="${SSH_KEY_FILE:-/oracle/.oci/id_rsa.pub}"
 
 if [ -f "$NOTIFY_CONF" ]; then
@@ -193,7 +195,6 @@ while true; do
 
     if echo "$RESULT" | grep -q '"id": "ocid1.instance'; then
       INSTANCE_ID=$(echo "$RESULT" | jq -r '.data.id // empty' 2>/dev/null)
-      PUBLIC_IP=$(echo "$RESULT" | jq -r '.data."display-name" // empty' 2>/dev/null)
 
       echo "$(date) SUCCESS: Instance created in $CURRENT_AD" | tee -a "$LOG"
       echo "Instance Name: $DISPLAY_NAME" | tee -a "$LOG"
@@ -220,9 +221,10 @@ Instance: $INSTANCE_ID"
 
     echo "$(date) FAILED in $CURRENT_AD: $ERR" | tee -a "$LOG"
 
-    AD_SLEEP=$(shuf -i 430-500 -n 1)
+    AD_SLEEP=$(shuf -i 120-180 -n 1)
     echo "$(date) Waiting $AD_SLEEP seconds before next AD/retry..." | tee -a "$LOG"
     sleep "$AD_SLEEP"
   done
 
   echo "===== Finished one full AD cycle: $(date). Starting next round... =====" | tee -a "$LOG"
+done
