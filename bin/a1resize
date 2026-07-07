@@ -16,4 +16,4 @@ A1_INSTANCE_OCID=$(
 oci compute instance update \
 --instance-id $A1_INSTANCE_OCID \
 --shape VM.Standard.A1.Flex \
---shape-config '{"ocpus": 4, "memoryInGBs": 24}'
+--shape-config '{"ocpus": 2, "memoryInGBs": 12}'
