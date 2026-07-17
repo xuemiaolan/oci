@@ -3,10 +3,13 @@
 set -e
 
 # OCI Docker CLI封装
-OCI="docker run --rm \
--e OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True \
--v /home/ubuntu/.oci:/oracle/.oci \
-oci"
+oci() {
+  docker run --rm \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" \
+    oci "$@"
+}
+
 
 INSTANCE_ID=$1
 
@@ -24,7 +27,7 @@ echo "$INSTANCE_ID"
 echo "================================="
 
 
-$OCI compute instance action \
+oci compute instance action \
     --instance-id "$INSTANCE_ID" \
     --action SOFTRESET
 
@@ -36,7 +39,7 @@ echo "Reboot command sent."
 sleep 10
 
 
-STATE=$($OCI compute instance get \
+STATE=$(oci compute instance get \
     --instance-id "$INSTANCE_ID" \
     --query 'data."lifecycle-state"' \
     --raw-output)
