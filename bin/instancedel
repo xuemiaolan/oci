@@ -1,0 +1,61 @@
+#!/bin/bash
+
+set -e
+
+# OCI Docker CLI封装
+oci() {
+  docker run --rm \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" \
+    oci "$@"
+}
+
+
+INSTANCE_ID=$1
+
+if [ -z "$INSTANCE_ID" ]; then
+    echo "Usage:"
+    echo "$0 <instance_ocid>"
+    exit 1
+fi
+
+
+echo "================================="
+echo "Delete instance"
+echo "Instance OCID:"
+echo "$INSTANCE_ID"
+echo "================================="
+
+
+read -r -p "This operation cannot be undone. Type DELETE to continue: " CONFIRM
+
+if [ "$CONFIRM" != "DELETE" ]; then
+    echo "Cancelled."
+    exit 0
+fi
+
+
+oci compute instance terminate \
+    --instance-id "$INSTANCE_ID" \
+    --preserve-boot-volume false \
+    --force
+
+
+echo
+echo "Delete command sent."
+
+
+sleep 10
+
+
+STATE=$(oci compute instance get \
+    --instance-id "$INSTANCE_ID" \
+    --query 'data."lifecycle-state"' \
+    --raw-output 2>/dev/null || true)
+
+if [ -n "$STATE" ]; then
+    echo "Current state: $STATE"
+else
+    echo "Instance no longer exists or is no longer accessible."
+fi
+
