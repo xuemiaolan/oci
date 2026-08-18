@@ -18,7 +18,9 @@ $SUDO apt-get install -y \
   lsb-release \
   iptables \
   iptables-persistent \
-  netfilter-persistent
+  netfilter-persistent \
+  fail2ban \
+  net-tools
 
 echo "[2/6] Add sing-box repository..."
 $SUDO install -d -m 0755 /etc/apt/keyrings
