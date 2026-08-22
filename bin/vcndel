@@ -1,0 +1,150 @@
+#!/bin/bash
+source ~/.bashrc
+shopt -s expand_aliases
+
+oci() {
+  docker run --rm \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" \
+    oci "$@"
+}
+
+VCN_ID=$1
+if [ -z "$VCN_ID" ]; then
+  echo "Usage: $0 <VCN_OCID>"
+  exit 1
+fi
+
+clean() {
+  echo "$1" | sed 's/[][]//g' | sed 's/"//g'
+}
+
+TMPFILE="$HOME/.oci/tmp/cleaned_routes.json"
+mkdir -p "$HOME/.oci/tmp"
+
+echo "=== Target VCN: $VCN_ID ==="
+
+############################################
+# 1. DELETE SUBNETS
+############################################
+echo "=== Deleting Subnets ==="
+for SUBNET in $(oci network subnet list -c $C --compartment-id $C --vcn-id "$VCN_ID" --query 'data[].id' --raw-output | sed 's/[][]//g' | sed 's/"//g'); do
+  echo "Deleting Subnet: $SUBNET"
+  oci network subnet delete --subnet-id "$SUBNET" --force
+done
+
+############################################
+# 2. CLEAN ROUTE TABLE REFERENCES (IG/NAT/SG)
+############################################
+echo "=== Cleaning Route Tables (removing IG/NAT/SG references) ==="
+
+for RT in $(oci network route-table list -c $C --compartment-id $C --vcn-id "$VCN_ID" --query 'data[].id' --raw-output | sed 's/[][]//g' | sed 's/"//g'); do
+  echo "Checking Route Table: $RT"
+
+  ROUTES=$(oci network route-table get --rt-id "$RT" --query 'data."route-rules"' --raw-output)
+
+  if [ -z "$ROUTES" ]; then
+    continue
+  fi
+
+  CLEANED=$(echo "$ROUTES" | jq '
+      map(select(.networkEntityId != null)) |
+      map(select(.networkEntityId | contains("internetgateway") | not)) |
+      map(select(.networkEntityId | contains("natgateway") | not)) |
+      map(select(.networkEntityId | contains("servicegateway") | not))
+  ')
+
+  echo "$CLEANED" > "$TMPFILE"
+
+  echo "Updating Route Table: $RT"
+  oci network route-table update --rt-id "$RT" --route-rules file:///oracle/.oci/tmp/cleaned_routes.json --force
+done
+
+############################################
+# 3. DELETE INTERNET GATEWAYS
+############################################
+echo "=== Deleting Internet Gateways ==="
+for IG in $(oci network internet-gateway list -c $C --compartment-id $C --vcn-id "$VCN_ID" --query 'data[].id' --raw-output | sed 's/[][]//g' | sed 's/"//g'); do
+  echo "Deleting Internet Gateway: $IG"
+  oci network internet-gateway delete --ig-id "$IG" --force
+done
+
+############################################
+# 4. DELETE NAT GATEWAYS
+############################################
+echo "=== Deleting NAT Gateways ==="
+for NAT in $(oci network nat-gateway list -c $C --compartment-id $C --vcn-id "$VCN_ID" --query 'data[].id' --raw-output | sed 's/[][]//g' | sed 's/"//g'); do
+  echo "Deleting NAT Gateway: $NAT"
+  oci network nat-gateway delete --nat-gateway-id "$NAT" --force
+done
+
+############################################
+# 5. DELETE SERVICE GATEWAYS
+############################################
+echo "=== Deleting Service Gateways ==="
+for SG in $(oci network service-gateway list -c $C --compartment-id $C --vcn-id "$VCN_ID" --query 'data[].id' --raw-output | sed 's/[][]//g' | sed 's/"//g'); do
+  echo "Deleting Service Gateway: $SG"
+  oci network service-gateway delete --service-gateway-id "$SG" --force
+done
+
+############################################
+# 6. DELETE DRG ATTACHMENTS
+############################################
+echo "=== Deleting DRG Attachments ==="
+for DRGATT in $(oci network drg-attachment list -c $C --compartment-id $C --vcn-id "$VCN_ID" --query 'data[].id' --raw-output | sed 's/[][]//g' | sed 's/"//g'); do
+  echo "Deleting DRG Attachment: $DRGATT"
+  oci network drg-attachment delete --drg-attachment-id "$DRGATT" --force
+done
+
+############################################
+# 7. DELETE LOCAL PEERING GATEWAYS
+############################################
+echo "=== Deleting Local Peering Gateways ==="
+for LPG in $(oci network local-peering-gateway list -c $C --compartment-id $C --vcn-id "$VCN_ID" --query 'data[].id' --raw-output | sed 's/[][]//g' | sed 's/"//g'); do
+  echo "Deleting LPG: $LPG"
+  oci network local-peering-gateway delete --lpg-id "$LPG" --force
+done
+
+############################################
+# 8. DELETE CUSTOM ROUTE TABLES
+############################################
+echo "=== Deleting custom Route Tables ==="
+for RT in $(oci network route-table list -c $C --compartment-id $C --vcn-id "$VCN_ID" --query 'data[].id' --raw-output | sed 's/[][]//g' | sed 's/"//g'); do
+  IS_DEFAULT=$(oci network route-table get --rt-id "$RT" --query 'data."is-default"' --raw-output)
+  if [[ "$IS_DEFAULT" == "false" ]]; then
+    echo "Deleting Route Table: $RT"
+    oci network route-table delete --rt-id "$RT" --force
+  fi
+done
+
+############################################
+# 9. DELETE CUSTOM SECURITY LISTS
+############################################
+echo "=== Deleting custom Security Lists ==="
+for SL in $(oci network security-list list -c $C --compartment-id $C --vcn-id "$VCN_ID" --query 'data[].id' --raw-output | sed 's/[][]//g' | sed 's/"//g'); do
+  IS_DEFAULT=$(oci network security-list get --security-list-id "$SL" --query 'data."is-default"' --raw-output)
+  if [[ "$IS_DEFAULT" == "false" ]]; then
+    echo "Deleting Security List: $SL"
+    oci network security-list delete --security-list-id "$SL" --force
+  fi
+done
+
+############################################
+# 10. DELETE CUSTOM DHCP OPTIONS
+############################################
+echo "=== Deleting custom DHCP Options ==="
+for DHCP in $(oci network dhcp-options list -c $C --compartment-id $C --vcn-id "$VCN_ID" --query 'data[].id' --raw-output | sed 's/[][]//g' | sed 's/"//g'); do
+  IS_DEFAULT=$(oci network dhcp-options get --dhcp-id "$DHCP" --query 'data."is-default"' --raw-output)
+  if [[ "$IS_DEFAULT" == "false" ]]; then
+    echo "Deleting DHCP Options: $DHCP"
+    oci network dhcp-options delete --dhcp-id "$DHCP" --force
+  fi
+done
+
+############################################
+# 11. DELETE VCN
+############################################
+echo "=== Deleting VCN ==="
+oci network vcn delete --vcn-id "$VCN_ID" --force
+
+echo "=== VCN Deleted Successfully ==="
