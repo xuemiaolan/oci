@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source ~/.bashrc
+shopt -s expand_aliases
+
+oci() {
+  docker run --rm -i \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" \
+    oci "$@"
+}
+
+IP_NAME="${1:-my-reserved-ip}"
+
+if [[ -z "${C:-}" ]]; then
+  echo "ERROR: C is empty. Please export C=<compartment_ocid>"
+  exit 1
+fi
+
+echo "[1/3] Create reserved public IP..."
+RESERVED_PUBLIC_IP_ID="$(
+  oci network public-ip create \
+    --compartment-id "$C" \
+    --lifetime RESERVED \
+    --display-name "$IP_NAME" \
+    --query 'data.id' \
+    --raw-output
+)"
+
+echo "RESERVED_PUBLIC_IP_ID=$RESERVED_PUBLIC_IP_ID"
+
+echo
+echo "[2/3] Get reserved public IP detail..."
+oci network public-ip get \
+  --public-ip-id "$RESERVED_PUBLIC_IP_ID" \
+  --query 'data.{name:"display-name",id:id,ip:"ip-address",lifetime:lifetime,state:"lifecycle-state",privateIpId:"private-ip-id"}' \
+  --output table
+
+echo
+echo "[3/3] Export command:"
+echo "export RESERVED_PUBLIC_IP_ID='$RESERVED_PUBLIC_IP_ID'"
+
+echo
+echo "Completed."

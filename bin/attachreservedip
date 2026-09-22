@@ -1,0 +1,246 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+source ~/.bashrc
+shopt -s expand_aliases
+
+oci() {
+  docker run --rm -i \
+    -e "OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True" \
+    -v "$HOME/.oci:/oracle/.oci" \
+    oci "$@"
+}
+
+INSTANCE_ID="${1:-}"
+RESERVED_PUBLIC_IP_ID="${2:-${RESERVED_PUBLIC_IP_ID:-}}"
+
+if [[ -z "$INSTANCE_ID" ]]; then
+  echo "Usage: $0 <INSTANCE_ID> <RESERVED_PUBLIC_IP_ID>"
+  echo "Or:"
+  echo "  export RESERVED_PUBLIC_IP_ID=<reserved_public_ip_ocid>"
+  echo "  $0 <INSTANCE_ID>"
+  exit 1
+fi
+
+if [[ -z "$RESERVED_PUBLIC_IP_ID" ]]; then
+  echo "ERROR: RESERVED_PUBLIC_IP_ID is empty."
+  exit 1
+fi
+
+if [[ -z "${C:-}" ]]; then
+  echo "ERROR: C is empty. Please export C=<compartment_ocid>"
+  exit 1
+fi
+
+run_required() {
+  local desc="$1"
+  shift
+  local out
+  local rc
+  out="$("$@" 2>&1)"
+  rc=$?
+  if [[ $rc -ne 0 ]]; then
+    echo "ERROR: ${desc} failed. rc=${rc}"
+    echo "$out"
+    exit $rc
+  fi
+  printf '%s' "$out"
+}
+
+is_empty_oci_value() {
+  local v="${1:-}"
+  [[ -z "$v" ]] && return 0
+  [[ "$v" == "null" ]] && return 0
+  [[ "$v" == "None" ]] && return 0
+  [[ "$v" == "Query returned empty result, no output to show." ]] && return 0
+  [[ "$v" == *"Query returned empty result"* ]] && return 0
+  return 1
+}
+
+echo "INSTANCE_ID=$INSTANCE_ID"
+echo "RESERVED_PUBLIC_IP_ID=$RESERVED_PUBLIC_IP_ID"
+echo
+
+echo "[1/8] Get primary VNIC attachment..."
+VNIC_ID="$(
+  run_required "get VNIC attachment" \
+  oci compute vnic-attachment list \
+    --compartment-id "$C" \
+    --instance-id "$INSTANCE_ID" \
+    --query 'data[0]."vnic-id"' \
+    --raw-output
+)"
+
+if is_empty_oci_value "$VNIC_ID"; then
+  echo "ERROR: Cannot find VNIC_ID for instance."
+  exit 1
+fi
+
+echo "VNIC_ID=$VNIC_ID"
+
+echo
+echo "[2/8] Get primary private IP..."
+PRIVATE_IP_ID="$(
+  run_required "get primary private IP" \
+  oci network private-ip list \
+    --vnic-id "$VNIC_ID" \
+    --query 'data[?"is-primary"==`true`].id | [0]' \
+    --raw-output
+)"
+
+if is_empty_oci_value "$PRIVATE_IP_ID"; then
+  echo "ERROR: Cannot find primary PRIVATE_IP_ID."
+  echo "Debug output:"
+  oci network private-ip list \
+    --vnic-id "$VNIC_ID" \
+    --query 'data[].{id:id,ip:"ip-address",primary:"is-primary"}' \
+    --output table
+  exit 1
+fi
+
+echo "PRIVATE_IP_ID=$PRIVATE_IP_ID"
+
+echo
+echo "[3/8] Show current VNIC info..."
+oci network vnic get \
+  --vnic-id "$VNIC_ID" \
+  --query 'data.{id:id,privateIp:"private-ip",publicIp:"public-ip",subnetId:"subnet-id"}' \
+  --output table
+
+echo
+echo "[4/8] Check current public IP from VNIC..."
+
+VNIC_PUBLIC_IP="$(
+  run_required "get VNIC public IP" \
+  oci network vnic get \
+    --vnic-id "$VNIC_ID" \
+    --query 'data."public-ip"' \
+    --raw-output
+)"
+
+OLD_PUBLIC_IP_ID=""
+
+if ! is_empty_oci_value "$VNIC_PUBLIC_IP"; then
+  echo "VNIC_PUBLIC_IP=$VNIC_PUBLIC_IP"
+  echo "Lookup public IP object by address..."
+
+  PUBLIC_GET_OUTPUT="$(
+    oci network public-ip get \
+      --public-ip-address "$VNIC_PUBLIC_IP" \
+      --query 'data.id' \
+      --raw-output 2>&1
+  )"
+  PUBLIC_GET_RC=$?
+
+  if [[ $PUBLIC_GET_RC -eq 0 ]]; then
+    OLD_PUBLIC_IP_ID="$PUBLIC_GET_OUTPUT"
+  else
+    echo "ERROR: Cannot get public IP object by address. rc=${PUBLIC_GET_RC}"
+    echo "$PUBLIC_GET_OUTPUT"
+    echo
+    echo "Manual check command:"
+    echo "oci network public-ip get --public-ip-address \"$VNIC_PUBLIC_IP\" --output json"
+    exit $PUBLIC_GET_RC
+  fi
+else
+  echo "No public IP shown on VNIC. Continue."
+fi
+
+if ! is_empty_oci_value "$OLD_PUBLIC_IP_ID"; then
+  OLD_PUBLIC_LIFETIME="$(
+    run_required "get old public IP lifetime" \
+    oci network public-ip get \
+      --public-ip-id "$OLD_PUBLIC_IP_ID" \
+      --query 'data.lifetime' \
+      --raw-output
+  )"
+
+  OLD_PUBLIC_IP="$(
+    run_required "get old public IP address" \
+    oci network public-ip get \
+      --public-ip-id "$OLD_PUBLIC_IP_ID" \
+      --query 'data."ip-address"' \
+      --raw-output
+  )"
+
+  echo "OLD_PUBLIC_IP_ID=$OLD_PUBLIC_IP_ID"
+  echo "OLD_PUBLIC_IP=$OLD_PUBLIC_IP"
+  echo "OLD_PUBLIC_LIFETIME=$OLD_PUBLIC_LIFETIME"
+
+  if [[ "$OLD_PUBLIC_LIFETIME" == "EPHEMERAL" ]]; then
+    echo
+    echo "[5/8] Delete old EPHEMERAL public IP..."
+    echo "WARNING: If you are connected through old public IP, SSH will disconnect now."
+    oci network public-ip delete \
+      --public-ip-id "$OLD_PUBLIC_IP_ID" \
+      --force
+    sleep 10
+  else
+    echo
+    echo "ERROR: Current public IP is not EPHEMERAL. It is: $OLD_PUBLIC_LIFETIME"
+    echo "Please unassign existing RESERVED public IP manually or choose another instance."
+    exit 1
+  fi
+else
+  echo "No existing public IP object found. Continue."
+  echo
+  echo "[5/8] Skip delete old public IP."
+fi
+
+echo
+echo "[6/8] Check reserved public IP before assign..."
+oci network public-ip get \
+  --public-ip-id "$RESERVED_PUBLIC_IP_ID" \
+  --query 'data.{name:"display-name",id:id,ip:"ip-address",lifetime:lifetime,state:"lifecycle-state",privateIpId:"private-ip-id"}' \
+  --output table
+
+# Older OCI CLI may print "Query returned empty result, no output to show."
+# when private-ip-id is empty. Treat that as unassigned, not assigned.
+RESERVED_ATTACHED_PRIVATE_IP_ID="$(
+  oci network public-ip get \
+    --public-ip-id "$RESERVED_PUBLIC_IP_ID" \
+    --query 'data."private-ip-id"' \
+    --raw-output 2>&1
+)"
+RESERVED_CHECK_RC=$?
+
+if [[ $RESERVED_CHECK_RC -ne 0 ]]; then
+  echo "ERROR: check reserved IP attachment failed. rc=${RESERVED_CHECK_RC}"
+  echo "$RESERVED_ATTACHED_PRIVATE_IP_ID"
+  exit $RESERVED_CHECK_RC
+fi
+
+if ! is_empty_oci_value "$RESERVED_ATTACHED_PRIVATE_IP_ID"; then
+  echo
+  echo "ERROR: This reserved public IP is already assigned to private IP:"
+  echo "  $RESERVED_ATTACHED_PRIVATE_IP_ID"
+  echo "Please unassign it first or use another reserved public IP."
+  exit 1
+fi
+
+echo "Reserved public IP is currently unassigned."
+
+echo
+echo "[7/8] Assign reserved public IP to private IP..."
+oci network public-ip update \
+  --public-ip-id "$RESERVED_PUBLIC_IP_ID" \
+  --private-ip-id "$PRIVATE_IP_ID" \
+  --wait-for-state ASSIGNED \
+  --force
+
+echo
+echo "[8/8] Verify result..."
+oci network public-ip get \
+  --public-ip-id "$RESERVED_PUBLIC_IP_ID" \
+  --query 'data.{name:"display-name",id:id,ip:"ip-address",lifetime:lifetime,state:"lifecycle-state",privateIpId:"private-ip-id"}' \
+  --output table
+
+echo
+echo "VNIC result:"
+oci network vnic get \
+  --vnic-id "$VNIC_ID" \
+  --query 'data.{id:id,privateIp:"private-ip",publicIp:"public-ip",subnetId:"subnet-id"}' \
+  --output table
+
+echo
+echo "Completed."
